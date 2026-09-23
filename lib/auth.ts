@@ -17,23 +17,31 @@ export function authSecret(): Uint8Array {
 }
 
 /**
- * The cookie only proves identity (user id). Role, department and active state are
- * ALWAYS re-read from the database, so role changes and deactivation take effect
- * immediately instead of after the 7-day token expiry.
+ * The cookie only proves identity (user id) plus the session_version it was issued
+ * under. Role, department and active state are ALWAYS re-read from the database, so
+ * role changes and deactivation take effect immediately. session_version additionally
+ * lets us revoke every OTHER already-issued cookie for an account on demand — bumped
+ * on password change/reset — so a stolen cookie stops working the moment the password
+ * changes, instead of surviving until its 12h expiry.
  */
 export const session = cache(async (): Promise<Session | null> => {
   const token = (await cookies()).get(COOKIE)?.value;
   if (!token) return null;
-  let id: string;
-  try { id = String((await jwtVerify(token, authSecret())).payload.sub); } catch { return null; }
-  const rows = await sql`select id,name,email,role,department,active,must_change_password from users where id=${id}::uuid`;
+  let id: string, v: number;
+  try {
+    const payload = (await jwtVerify(token, authSecret())).payload;
+    id = String(payload.sub);
+    v = Number(payload.v ?? -1);
+  } catch { return null; }
+  const rows = await sql`select id,name,email,role,department,active,must_change_password,session_version from users where id=${id}::uuid`;
   const u = rows[0];
   if (!u || !u.active) return null;
+  if (Number(u.session_version) !== v) return null; // revoked by a password change/reset since this cookie was issued
   return { id: u.id, name: u.name, email: u.email, role: u.role, department: u.department, mustChangePassword: u.must_change_password };
 });
 
-export async function startSession(userId: string) {
-  const token = await new SignJWT({}).setSubject(userId).setProtectedHeader({ alg: 'HS256' })
+export async function startSession(userId: string, sessionVersion: number) {
+  const token = await new SignJWT({ v: sessionVersion }).setSubject(userId).setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt().setExpirationTime('12h').sign(authSecret());
   (await cookies()).set(COOKIE, token, {
     httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', path: '/', maxAge: 12 * 3600,

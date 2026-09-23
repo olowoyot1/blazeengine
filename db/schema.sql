@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS users(
   must_change_password boolean NOT NULL DEFAULT false,
   failed_attempts int NOT NULL DEFAULT 0,
   locked_until timestamptz,
+  session_version int NOT NULL DEFAULT 0,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
@@ -49,6 +50,7 @@ CREATE TABLE IF NOT EXISTS sales(
   property_name text,
   plot_reference text,
   amount numeric(14,2) NOT NULL DEFAULT 0,
+  quoted_amount numeric(14,2),
   description text,
   status text NOT NULL DEFAULT 'DRAFT',
   payment_status text NOT NULL DEFAULT 'UNPAID',
@@ -59,6 +61,8 @@ CREATE TABLE IF NOT EXISTS sales(
   sales_invoice_no text,
   ops_due_date date,
   chain_round int NOT NULL DEFAULT 0,
+  gate_approved_by uuid REFERENCES users(id),
+  invoice_variance_reason text,
   returned_reason text,
   approved_at timestamptz,
   allocation_date date,
@@ -193,3 +197,11 @@ CREATE INDEX IF NOT EXISTS idx_approvals_pending ON approvals(status, approver_r
 CREATE INDEX IF NOT EXISTS idx_events_entity ON workflow_events(entity_type, entity_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, read_at, created_at);
 CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_logs(user_id, created_at);
+
+-- v3.1 hardening additions: safe to run again on a database that already has v3.0's
+-- schema.sql applied (all columns/index below are IF NOT EXISTS / idempotent).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS session_version int NOT NULL DEFAULT 0;
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS quoted_amount numeric(14,2);
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS gate_approved_by uuid REFERENCES users(id);
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS invoice_variance_reason text;
+UPDATE sales SET quoted_amount = amount WHERE quoted_amount IS NULL;

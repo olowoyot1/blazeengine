@@ -15,7 +15,7 @@
 import type { Role } from '../constants';
 import { EXPENSE_STATUS_LABEL } from '../constants';
 import {
-  ForbiddenError, WorkflowError, audit, logEvent, money, notifyRoles, notifyUsers, one, parseFields, run,
+  ForbiddenError, WorkflowError, assertFreshEvidence, audit, logEvent, money, notifyRoles, notifyUsers, one, parseFields, run,
   type Actor, type Ctx, type Field, type Parsed,
 } from './core';
 import type { Row } from '../db';
@@ -51,8 +51,13 @@ export const EXPENSE_ACTIONS: ExpenseAction[] = [
       { name: 'variance_reason', label: 'Variance reason (if above negotiated amount)', type: 'textarea' },
     ],
     async apply(ctx, e, i) {
-      if (e.negotiated_amount != null && Number(i.amount) > Number(e.negotiated_amount) && !i.variance_reason)
-        throw new WorkflowError(`Amount exceeds the negotiated ${money(e.negotiated_amount)} – give a variance reason`);
+      if (e.negotiated_amount != null) {
+        const ceiling = Number(e.negotiated_amount) * 1.5;
+        if (Number(i.amount) > ceiling)
+          throw new WorkflowError(`Amount is more than 50% above the negotiated ${money(e.negotiated_amount)} — this needs a fresh negotiation, not a variance reason`);
+        if (Number(i.amount) > Number(e.negotiated_amount) && !i.variance_reason)
+          throw new WorkflowError(`Amount exceeds the negotiated ${money(e.negotiated_amount)} – give a variance reason`);
+      }
       const round = Number(e.round_no) + 1;
       await ctx.tx.query(`update expenses set amount=$2, round_no=$3 where id=$1`, [e.id, i.amount, round]);
       await openRound(ctx, 'EXPENSE', e.id, 'EXP_REVIEW', round, OPS_HR_THEN_CEO);
@@ -68,6 +73,7 @@ export const EXPENSE_ACTIONS: ExpenseAction[] = [
       { name: 'bank_reference', label: 'Bank transfer reference', type: 'text', required: true },
     ],
     async apply(ctx, e, i) {
+      await assertFreshEvidence(ctx, i.bank_proof_url, 'bank proof');
       const round = Number(e.round_no) + 1;
       await ctx.tx.query(`update expenses set bank_proof_url=$2, bank_reference=$3, round_no=$4 where id=$1`, [e.id, i.bank_proof_url, i.bank_reference, round]);
       await openRound(ctx, 'EXPENSE', e.id, 'PAY_REVIEW', round, OPS_HR_THEN_CEO);
@@ -88,6 +94,28 @@ export const EXPENSE_ACTIONS: ExpenseAction[] = [
     },
   },
   {
+    key: 'revise_negotiation', label: 'Revise & resubmit negotiation',
+    help: 'This negotiation was rejected. Correct the terms and resubmit — a new Ops Manager & HR review round opens.',
+    roles: ['SITE_MANAGER'], from: ['REJECTED'], to: 'NEGOTIATION_SUBMITTED',
+    fields: [
+      { name: 'category', label: 'Category', type: 'text', required: true },
+      { name: 'vendor', label: 'Vendor', type: 'text', required: true },
+      { name: 'negotiated_amount', label: 'Negotiated amount (₦)', type: 'number', required: true, min: 1 },
+      { name: 'negotiation_notes', label: 'What changed', type: 'textarea', required: true },
+      { name: 'negotiation_url', label: 'Supporting document link', type: 'url' },
+    ],
+    async apply(ctx, e, i) {
+      if (e.origin !== 'NEGOTIATION') throw new WorkflowError('Only a negotiated expense can be revised — enter a new direct expense instead');
+      const round = Number(e.round_no) + 1;
+      await ctx.tx.query(
+        `update expenses set category=$2, vendor=$3, negotiated_amount=$4, negotiation_notes=$5, negotiation_url=$6, amount=null, round_no=$7, rejected_reason=null where id=$1`,
+        [e.id, i.category, i.vendor, i.negotiated_amount, i.negotiation_notes, i.negotiation_url, round]);
+      await openRound(ctx, 'EXPENSE', e.id, 'NEG_REVIEW', round, NEG_STEPS);
+      await notifyRoles(ctx, ['ACCOUNTANT'], { title: 'Vendor negotiation resubmitted', message: label(e), link: link(e) });
+      return String(i.negotiation_notes);
+    },
+  },
+  {
     key: 'issue_receipt', label: 'Generate receipt & share',
     help: 'Generate the receipt from internet banking and share it with Operations, HR and the Site Manager.',
     roles: ['ACCOUNTANT'], from: ['PAID'], to: 'RECEIPT_ISSUED',
@@ -96,6 +124,7 @@ export const EXPENSE_ACTIONS: ExpenseAction[] = [
       { name: 'receipt_url', label: 'Receipt link', type: 'url', required: true },
     ],
     async apply(ctx, e, i) {
+      await assertFreshEvidence(ctx, i.receipt_url, 'receipt');
       await ctx.tx.query(`update expenses set receipt_no=$2, receipt_url=$3 where id=$1`, [e.id, i.receipt_no, i.receipt_url]);
       const n = { title: 'Receipt issued', message: `${label(e)} — receipt ${i.receipt_no}`, link: link(e) };
       await notifyRoles(ctx, ['OPERATIONS_MANAGER', 'OPERATIONS', 'HR', 'SITE_MANAGER'], n);
@@ -206,10 +235,18 @@ registerRound('EXP_REVIEW', {
     await notifyRoles(ctx, ['FINANCE_OPERATIONS'], { title: 'Expense approved – make payment', message: label(e), link: link(e) });
   },
   async onReject(ctx, a, comment) {
-    const e = (await one(ctx, `update expenses set status='REJECTED', rejected_reason=$2, updated_at=now() where id=$1 returning *`, [a.entity_id, `${a.step}: ${comment}`]))!;
-    await logEvent(ctx, 'EXPENSE', e.id, 'APPROVAL', 'Expense rejected', 'EXPENSE_ENTERED', 'REJECTED', comment);
+    // A negotiated expense recovers to NEGOTIATION_APPROVED so the Accountant can
+    // correct and re-enter it, instead of the negotiation work being thrown away.
+    // A direct expense (no prior negotiation stage to fall back to) ends here.
+    const before = await one(ctx, `select origin from expenses where id=$1`, [a.entity_id]);
+    const recoverable = before?.origin === 'NEGOTIATION';
+    const to = recoverable ? 'NEGOTIATION_APPROVED' : 'REJECTED';
+    const e = (await one(ctx, `update expenses set status=$2, rejected_reason=$3, amount=null, updated_at=now() where id=$1 returning *`, [a.entity_id, to, `${a.step}: ${comment}`]))!;
+    await logEvent(ctx, 'EXPENSE', e.id, 'APPROVAL', 'Expense rejected', 'EXPENSE_ENTERED', to, comment);
     await notifyUsers(ctx, [e.submitted_by], { title: 'Expense rejected', message: `${label(e)}: ${comment}`, link: link(e) });
-    await notifyRoles(ctx, ['ACCOUNTANT', 'SITE_MANAGER'], { title: 'Expense rejected', message: `${label(e)}: ${comment}`, link: link(e) });
+    await notifyRoles(ctx, recoverable ? ['ACCOUNTANT'] : ['ACCOUNTANT', 'SITE_MANAGER'], {
+      title: recoverable ? 'Expense rejected – correct and re-enter' : 'Expense rejected', message: `${label(e)}: ${comment}`, link: link(e),
+    });
   },
 });
 

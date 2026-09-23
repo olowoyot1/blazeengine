@@ -131,3 +131,18 @@ export function parseFields(fields: Field[], input: Record<string, unknown>): Pa
 export const money = (v: unknown) => '₦' + Number(v ?? 0).toLocaleString('en-NG');
 
 export { d10 } from '../format';
+
+/**
+ * Cheap, partial mitigation for "evidence is just a URL, not a verified file":
+ * refuses to accept a financial-evidence link (payment proof, bank proof, receipt)
+ * that has already been used as evidence elsewhere in the system, catching the
+ * simplest form of reuse/fabrication. It cannot verify the link's actual content.
+ */
+export async function assertFreshEvidence(ctx: Ctx, url: unknown, label: string) {
+  if (!url) return;
+  const dup = await one(ctx, `
+    select 1 from sale_documents where document_url=$1
+    union all select 1 from expenses where bank_proof_url=$1 or receipt_url=$1 or negotiation_url=$1
+    limit 1`, [String(url)]);
+  if (dup) throw new WorkflowError(`This ${label} link has already been used as evidence elsewhere — each proof must be unique`);
+}

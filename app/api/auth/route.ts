@@ -35,7 +35,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Invalid email or password' }, { status: 401 });
   }
   await sql`update users set failed_attempts=0, locked_until=null where id=${u.id}`;
-  await startSession(u.id);
+  await startSession(u.id, Number(u.session_version ?? 0));
   await sql`insert into audit_logs(user_id,action,entity_type,entity_id) values(${u.id},'LOGIN','USER',${u.id})`;
   return NextResponse.json({ ok: true, mustChangePassword: !!u.must_change_password });
 }

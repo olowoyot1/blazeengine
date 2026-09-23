@@ -18,7 +18,7 @@
 import type { Role } from '../constants';
 import { ALLOCATION_WINDOW_DAYS, SALE_STATUS_LABEL } from '../constants';
 import {
-  ForbiddenError, WorkflowError, audit, d10, logEvent, mailClient, many, money, notifyRoles, notifyUsers, one,
+  ForbiddenError, WorkflowError, assertFreshEvidence, audit, d10, logEvent, mailClient, many, money, notifyRoles, notifyUsers, one,
   parseFields, run, type Actor, type Ctx, type Field, type Parsed,
 } from './core';
 import type { Row } from '../db';
@@ -81,6 +81,7 @@ export const SALE_ACTIONS: SaleAction[] = [
       { name: 'amount_paid', label: 'Amount paid (₦)', type: 'number', min: 1 },
     ],
     async apply(ctx, s, i) {
+      await assertFreshEvidence(ctx, i.proof_url, 'payment proof');
       await addDoc(ctx, s.id, 'PAYMENT_PROOF', i.proof_url, 'Payment proof');
       await ctx.tx.query(`update sales set payment_status='PROOF_SUBMITTED', payment_reference=$2 where id=$1`, [s.id, i.payment_reference]);
       await notifyRoles(ctx, ['ACCOUNTANT'], { title: 'Payment proof uploaded', message: `${saleLabel(s)} — reference ${i.payment_reference}. Enter the invoice.`, link: saleLink(s) });
@@ -100,22 +101,29 @@ export const SALE_ACTIONS: SaleAction[] = [
   },
   {
     key: 'enter_invoice', label: 'Enter invoice',
-    help: 'Verify the payment and enter the invoice. On submission the sale goes back to the Sales Manager and Sales Executive.',
+    help: 'Verify the payment and enter the invoice. If the amount differs from the original quote by more than 2%, a reason is required. On submission the sale goes back to the Sales Manager and Sales Executive.',
     roles: ['ACCOUNTANT'], from: ['PAYMENT_PROOF_SUBMITTED'], to: 'INVOICE_ENTERED',
     fields: [
       { name: 'invoice_number', label: 'Invoice number', type: 'text', required: true },
       { name: 'invoice_amount', label: 'Invoice amount (₦)', type: 'number', required: true, min: 1 },
       { name: 'invoice_url', label: 'Invoice link (optional)', type: 'url' },
+      { name: 'variance_reason', label: 'Reason for amount differing from the original quote (if applicable)', type: 'textarea' },
     ],
     async apply(ctx, s, i) {
-      const dup = await one(ctx, `select 1 from sales where invoice_number=$1 and id<>$2 limit 1`, [i.invoice_number, s.id]);
-      if (dup) throw new WorkflowError(`Invoice number ${i.invoice_number} is already used on another sale`);
-      await ctx.tx.query(`update sales set invoice_number=$2, amount=$3, payment_status='VERIFIED' where id=$1`, [s.id, i.invoice_number, i.invoice_amount]);
+      const dup = await one(ctx, `select 1 from sales where invoice_number=$1 and id<>$2 and status<>'CANCELLED' limit 1`, [i.invoice_number, s.id]);
+      if (dup) throw new WorkflowError(`Invoice number ${i.invoice_number} is already used on another active sale`);
+      const quoted = Number(s.quoted_amount ?? s.amount);
+      const varianceRatio = quoted > 0 ? Math.abs(Number(i.invoice_amount) - quoted) / quoted : 0;
+      if (varianceRatio > 0.02 && !i.variance_reason)
+        throw new WorkflowError(`Invoice amount differs from the original quote (${money(quoted)}) by ${(varianceRatio * 100).toFixed(1)}% — a reason is required`);
+      await ctx.tx.query(`update sales set invoice_number=$2, amount=$3, payment_status='VERIFIED', invoice_variance_reason=$4 where id=$1`,
+        [s.id, i.invoice_number, i.invoice_amount, i.variance_reason ?? null]);
       await addDoc(ctx, s.id, 'INVOICE', i.invoice_url, `Invoice ${i.invoice_number}`);
-      const n = { title: 'Invoice entered – sale awaiting approval', message: `${saleLabel(s)} — ${money(i.invoice_amount)} (invoice ${i.invoice_number}).`, link: saleLink(s) };
+      const flag = varianceRatio > 0.02 ? ` ⚠ differs from the original quote of ${money(quoted)} (${i.variance_reason})` : '';
+      const n = { title: 'Invoice entered – sale awaiting approval', message: `${saleLabel(s)} — ${money(i.invoice_amount)} (invoice ${i.invoice_number}).${flag}`, link: saleLink(s) };
       await notifyRoles(ctx, ['SALES_MANAGER'], n);
       await notifyUsers(ctx, [s.created_by], n);
-      return `Invoice ${i.invoice_number} · ${money(i.invoice_amount)}`;
+      return `Invoice ${i.invoice_number} · ${money(i.invoice_amount)}${flag}`;
     },
   },
   {
@@ -135,6 +143,10 @@ export const SALE_ACTIONS: SaleAction[] = [
     roles: ['SALES_MANAGER'], from: ['INVOICE_ENTERED'], to: 'SALES_APPROVED',
     fields: [{ name: 'note', label: 'Note (optional)', type: 'textarea' }],
     async apply(ctx, s) {
+      // Recorded so the later "Sales Manager approval" step of the SALE_CHAIN can
+      // require a *different* Sales Manager — one person shouldn't bless the same
+      // sale twice under two different hats.
+      await ctx.tx.query(`update sales set gate_approved_by=$2 where id=$1`, [s.id, ctx.actor.id]);
       await openTask(ctx, s.id, 'CONTRACT_DEED');
       const n = { title: 'Approved sale received', message: `${saleLabel(s)}. Create the contract and deed.`, link: saleLink(s) };
       await notifyRoles(ctx, OPS, n);
@@ -357,8 +369,8 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
       [p.property_name, p.plot_reference]);
     if (taken) throw new WorkflowError('This plot is already attached to another active sale (double-sale prevention)');
     const s = (await one(ctx,
-      `insert into sales(client_id,lead_id,client_name,client_email,property_name,plot_reference,amount,description,created_by)
-       values($1,(select id from leads where client_id=$1 limit 1),$2,$3,$4,$5,$6,$7,$8) returning id`,
+      `insert into sales(client_id,lead_id,client_name,client_email,property_name,plot_reference,amount,quoted_amount,description,created_by)
+       values($1,(select id from leads where client_id=$1 limit 1),$2,$3,$4,$5,$6,$6,$7,$8) returning id`,
       [client.id, client.name, client.email, p.property_name, p.plot_reference, p.amount, p.description, actor.id]))!;
     await logEvent(ctx, 'SALE', s.id, 'SALES', 'Sale created', null, 'DRAFT', `${p.property_name} / ${p.plot_reference} · ${money(p.amount)}`);
     await audit(ctx, 'SALE_CREATED', 'SALE', s.id, { client: client.name });
@@ -371,6 +383,13 @@ registerRound('SALE_CHAIN', {
   entity: 'SALE',
   link: id => `/sales/${id}`,
   async title(ctx, id) { const s = await one(ctx, `select * from sales where id=$1`, [id]); return s ? `${saleLabel(s)} — ${money(s.amount)}` : ''; },
+  async conflict(ctx, approval, actor) {
+    if (approval.step !== 'Sales Manager approval') return null;
+    const s = await one(ctx, `select gate_approved_by from sales where id=$1`, [approval.entity_id]);
+    if (s?.gate_approved_by && s.gate_approved_by === actor.id)
+      return 'You already approved this sale earlier in the process — a different Sales Manager must complete this audit step';
+    return null;
+  },
   async onComplete(ctx, a) {
     const s = (await one(ctx, `update sales set status='FULLY_APPROVED', approved_at=now(), updated_at=now(), returned_reason=null where id=$1 returning *`, [a.entity_id]))!;
     await logEvent(ctx, 'SALE', s.id, 'APPROVAL', 'Approval chain complete', 'IN_APPROVAL', 'FULLY_APPROVED', null);

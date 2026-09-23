@@ -38,9 +38,13 @@ async function main() {
   }
   const other = (await pg.query(`insert into users(name,email,password_hash,role) values('SALES2','s2@t.io','x','SALES') returning id`)).rows[0] as any;
   const SALES2: wf.Actor = { id: other.id, name: 'SALES2', role: 'SALES' };
+  // Separation of duties: a second Sales Manager represents the independent audit-step
+  // approver, distinct from whoever performed the earlier "approve sale" gate.
+  const sm2 = (await pg.query(`insert into users(name,email,password_hash,role) values('SALES_MANAGER2','sm2@t.io','x','SALES_MANAGER') returning id`)).rows[0] as any;
+  const SALES_MANAGER2: wf.Actor = { id: sm2.id, name: 'SALES_MANAGER2', role: 'SALES_MANAGER' };
   const status = async (id: string) => ((await pg.query(`select status from sales where id=$1`, [id])).rows[0] as any).status;
   const estatus = async (id: string) => ((await pg.query(`select status from expenses where id=$1`, [id])).rows[0] as any).status;
-  const unread = async (role: string) => Number(((await pg.query(`select count(*) n from notifications n join users u on u.id=n.user_id where u.role=$1`, [role])).rows[0] as any).n);
+  const unread = async (userId: string) => Number(((await pg.query(`select count(*) n from notifications where user_id=$1`, [userId])).rows[0] as any).n);
   const pendingFor = async (id: string, role: string) => (await pg.query(`select * from approvals where entity_id=$1 and approver_role=$2 and status='PENDING' order by created_at`, [id, role])).rows as any[];
   const act = (a: wf.Actor, id: string, key: string, input: any = {}) => wf.performSaleAction(a, id, key, input);
   const url = (n: string) => `https://files.example.com/${n}.pdf`;
@@ -92,14 +96,14 @@ async function main() {
   await t('row1: sales uploads payment proof → accountant notified', async () => {
     await act(U.SALES, sale, 'submit_payment_proof', { proof_url: url('proof'), payment_reference: 'R1', amount_paid: '5000000' });
     assert.equal(await status(sale), 'PAYMENT_PROOF_SUBMITTED');
-    assert.equal(await unread('ACCOUNTANT'), 1);
+    assert.equal(await unread(U.ACCOUNTANT.id), 1);
   });
   await t('row2: accountant enters invoice → sales manager + sales exec notified', async () => {
-    const sm0 = await unread('SALES_MANAGER'), s0 = await unread('SALES');
+    const sm0 = await unread(U.SALES_MANAGER.id), s0 = await unread(U.SALES.id);
     await act(U.ACCOUNTANT, sale, 'enter_invoice', { invoice_number: 'INV-1', invoice_amount: '5000000' });
     assert.equal(await status(sale), 'INVOICE_ENTERED');
-    assert.equal(await unread('SALES_MANAGER'), sm0 + 1);
-    assert.equal(await unread('SALES'), s0 + 1);
+    assert.equal(await unread(U.SALES_MANAGER.id), sm0 + 1);
+    assert.equal(await unread(U.SALES.id), s0 + 1);
   });
   await t('sales manager can send back, then approve', async () => {
     await act(U.SALES_MANAGER, sale, 'reject_sale', { reason: 'Amount mismatch' });
@@ -110,7 +114,7 @@ async function main() {
     await denied(act(U.OPERATIONS_MANAGER, sale, 'approve_sale'), /not permitted/);
     await act(U.SALES_MANAGER, sale, 'approve_sale', {});
     assert.equal(await status(sale), 'SALES_APPROVED');
-    assert.ok(await unread('OPERATIONS') >= 1);
+    assert.ok(await unread(U.OPERATIONS.id) >= 1);
   });
   await t('row3: operations creates contract & deed → accounts notified', async () => {
     await denied(act(U.OPERATIONS, sale, 'create_contract', { contract_url: url('c') }), /Deed link is required/);
@@ -124,7 +128,7 @@ async function main() {
   await t('rows5-6: operations opens portal → site manager notified, 30-day clock set', async () => {
     await act(U.OPERATIONS_MANAGER, sale, 'open_ops_portal', {});
     assert.equal(await status(sale), 'SITE_NOTIFIED');
-    assert.equal(await unread('SITE_MANAGER'), 1);
+    assert.equal(await unread(U.SITE_MANAGER.id), 1);
     const r = (await pg.query(`select (ops_due_date - current_date) d from sales where id=$1`, [sale])).rows[0] as any;
     assert.equal(Number(r.d), 30);
     const task = (await pg.query(`select 1 from operations where sale_id=$1 and task_type='ALLOCATION_DOCS' and status='PENDING'`, [sale])).rows;
@@ -155,8 +159,10 @@ async function main() {
     await denied(wf.decide(U.HR, smA.id, 'APPROVED'), /Only SALES MANAGER/);
     await denied(wf.decide(U.SITE_MANAGER, smA.id, 'APPROVED'), /Only SALES MANAGER/);
     await denied(wf.decide(U.ADMIN, smA.id, 'APPROVED'), /Only SALES MANAGER/);
-    await wf.decide(U.SALES_MANAGER, smA.id, 'APPROVED');
-    await denied(wf.decide(U.SALES_MANAGER, smA.id, 'APPROVED'), /already been actioned/);
+    // the Sales Manager who approved this sale earlier cannot also clear this step (separation of duties)
+    await denied(wf.decide(U.SALES_MANAGER, smA.id, 'APPROVED'), /already approved this sale earlier/);
+    await wf.decide(SALES_MANAGER2, smA.id, 'APPROVED');
+    await denied(wf.decide(SALES_MANAGER2, smA.id, 'APPROVED'), /already been actioned/);
     // Ops manager rejects → sale returned, remaining steps closed
     await denied(wf.decide(U.OPERATIONS_MANAGER, opA.id, 'REJECTED', ''), /reason is required/);
     await wf.decide(U.OPERATIONS_MANAGER, opA.id, 'REJECTED', 'Survey plan unsigned');
@@ -170,7 +176,7 @@ async function main() {
     for (const role of ['SALES_MANAGER', 'OPERATIONS_MANAGER', 'HR', 'CEO'] as const) {
       const [a] = await pendingFor(sale, role);
       assert.ok(a, `${role} step missing`);
-      await wf.decide(U[role], a.id, 'APPROVED');
+      await wf.decide(role === 'SALES_MANAGER' ? SALES_MANAGER2 : U[role], a.id, 'APPROVED');
     }
     assert.equal(await status(sale), 'FULLY_APPROVED');
     const r = (await pg.query(`select approved_at from sales where id=$1`, [sale])).rows[0] as any;
@@ -235,7 +241,7 @@ async function main() {
   await t('row15: CEO approves after ops & HR → finance ops notified', async () => {
     for (const r of ['OPERATIONS_MANAGER', 'HR', 'CEO'] as const) { const [a] = await pendingFor(ex, r); await wf.decide(U[r], a.id, 'APPROVED'); }
     assert.equal(await estatus(ex), 'EXPENSE_APPROVED');
-    assert.ok(await unread('FINANCE_OPERATIONS') >= 1);
+    assert.ok(await unread(U.FINANCE_OPERATIONS.id) >= 1);
   });
   await t('row16: finance ops uploads bank proof; rejected proof loops back, re-upload works', async () => {
     await denied(wf.performExpenseAction(U.ACCOUNTANT, ex, 'upload_bank_proof', { bank_proof_url: url('b'), bank_reference: 'B1' }), /not permitted/);
@@ -250,16 +256,16 @@ async function main() {
   });
   await t('row17: bank alert → PAID, all team members notified', async () => {
     await denied(wf.performExpenseAction(U.SITE_MANAGER, ex, 'record_bank_alert', { bank_alert_ref: 'A1' }), /not permitted/);
-    const before = await unread('SITE_MANAGER');
+    const before = await unread(U.SITE_MANAGER.id);
     await wf.performExpenseAction(U.FINANCE_OPERATIONS, ex, 'record_bank_alert', { bank_alert_ref: 'ALERT-1' });
     assert.equal(await estatus(ex), 'PAID');
-    assert.equal(await unread('SITE_MANAGER'), before + 1);
+    assert.equal(await unread(U.SITE_MANAGER.id), before + 1);
   });
   await t('row18: accountant issues receipt, shared with Ops, HR, Site Manager', async () => {
-    const hr0 = await unread('HR');
+    const hr0 = await unread(U.HR.id);
     await wf.performExpenseAction(U.ACCOUNTANT, ex, 'issue_receipt', { receipt_no: 'RCT-1', receipt_url: url('r') });
     assert.equal(await estatus(ex), 'RECEIPT_ISSUED');
-    assert.equal(await unread('HR'), hr0 + 1);
+    assert.equal(await unread(U.HR.id), hr0 + 1);
   });
   await t('negotiation rejection ends the flow; direct expense uses same approvals', async () => {
     const e2 = await wf.createNegotiation(U.SITE_MANAGER, { category: 'Fencing', vendor: 'V', negotiated_amount: '10', negotiation_notes: 'n' });
@@ -279,6 +285,80 @@ async function main() {
     await denied(act(U.SALES, s3, 'submit_payment_proof', { proof_url: url('p'), payment_reference: '' }), /required/);
     assert.equal(Number(((await pg.query(`select count(*) n from sale_documents`)).rows[0] as any).n), docsBefore);
     assert.equal(await status(s3), 'DRAFT');
+  });
+
+
+  console.log('\nHardening fixes');
+  await t('invoice amount >2% off the original quote requires a reason', async () => {
+    const c4 = await wf.convertLead(U.SALES_MANAGER, await wf.createLead(U.SALES_MANAGER, { name: 'Hard1', phone: '0711' }));
+    const sH = await wf.createSale(U.SALES, { client_id: c4, property_name: 'Blaze Estate', plot_reference: 'H-1', amount: '1000000' });
+    await act(U.SALES, sH, 'submit_payment_proof', { proof_url: url('h1proof'), payment_reference: 'RH1' });
+    await denied(act(U.ACCOUNTANT, sH, 'enter_invoice', { invoice_number: 'INV-H1', invoice_amount: '1200000' }), /differs from the original quote/);
+    await act(U.ACCOUNTANT, sH, 'enter_invoice', { invoice_number: 'INV-H1', invoice_amount: '1200000', variance_reason: 'Client added extra plot fee' });
+    assert.equal(await status(sH), 'INVOICE_ENTERED');
+    // within 2% needs no reason
+    const c5 = await wf.convertLead(U.SALES_MANAGER, await wf.createLead(U.SALES_MANAGER, { name: 'Hard2', phone: '0712' }));
+    const sH2 = await wf.createSale(U.SALES, { client_id: c5, property_name: 'Blaze Estate', plot_reference: 'H-2', amount: '1000000' });
+    await act(U.SALES, sH2, 'submit_payment_proof', { proof_url: url('h2proof'), payment_reference: 'RH2' });
+    await act(U.ACCOUNTANT, sH2, 'enter_invoice', { invoice_number: 'INV-H2', invoice_amount: '1010000' });
+    assert.equal(await status(sH2), 'INVOICE_ENTERED');
+  });
+
+  await t('the Sales Manager who approved the sale cannot also be the chain\'s Sales Manager approver', async () => {
+    const c6 = await wf.convertLead(U.SALES_MANAGER, await wf.createLead(U.SALES_MANAGER, { name: 'Hard3', phone: '0713' }));
+    const sH3 = await wf.createSale(U.SALES, { client_id: c6, property_name: 'Blaze Estate', plot_reference: 'H-3', amount: '500000' });
+    await act(U.SALES, sH3, 'submit_payment_proof', { proof_url: url('h3proof'), payment_reference: 'RH3' });
+    await act(U.ACCOUNTANT, sH3, 'enter_invoice', { invoice_number: 'INV-H3', invoice_amount: '500000' });
+    await act(U.SALES_MANAGER, sH3, 'approve_sale', {});
+    await act(U.OPERATIONS, sH3, 'create_contract', { contract_url: url('h3c'), deed_url: url('h3d') });
+    await act(U.ACCOUNTANT, sH3, 'send_sales_documents', { sales_order_no: 'SOH3', sales_receipt_no: 'SRH3', sales_invoice_no: 'SIH3' });
+    await act(U.OPERATIONS_MANAGER, sH3, 'open_ops_portal', {});
+    await act(U.OPERATIONS, sH3, 'upload_allocation_docs', { deed_of_assignment_url: url('h3doa'), survey_plan_url: url('h3sv') });
+    await act(U.SITE_MANAGER, sH3, 'final_audit', { audit_findings: 'ok', confirmed: 'on' });
+    const [smStep] = await pendingFor(sH3, 'SALES_MANAGER');
+    await denied(wf.decide(U.SALES_MANAGER, smStep.id, 'APPROVED'), /already approved this sale earlier/);
+  });
+
+  await t('expense amount more than 50% above negotiated is blocked outright', async () => {
+    const eH = await wf.createNegotiation(U.SITE_MANAGER, { category: 'Fencing', vendor: 'CapVendor', negotiated_amount: '100000', negotiation_notes: 'n' });
+    for (const r of ['OPERATIONS_MANAGER', 'HR'] as const) { const [a] = await pendingFor(eH, r); await wf.decide(U[r], a.id, 'APPROVED'); }
+    assert.equal(await estatus(eH), 'NEGOTIATION_APPROVED');
+    await denied(wf.performExpenseAction(U.ACCOUNTANT, eH, 'enter_expense', { amount: '160000' }), /needs a fresh negotiation/);
+    await wf.performExpenseAction(U.ACCOUNTANT, eH, 'enter_expense', { amount: '140000', variance_reason: 'Extra materials needed' });
+    assert.equal(await estatus(eH), 'EXPENSE_ENTERED');
+  });
+
+  await t('rejected negotiated expense recovers to NEGOTIATION_APPROVED (no dead end) and can be re-entered', async () => {
+    const eR = await wf.createNegotiation(U.SITE_MANAGER, { category: 'Signage', vendor: 'SignCo', negotiated_amount: '50000', negotiation_notes: 'n' });
+    for (const r of ['OPERATIONS_MANAGER', 'HR'] as const) { const [a] = await pendingFor(eR, r); await wf.decide(U[r], a.id, 'APPROVED'); }
+    await wf.performExpenseAction(U.ACCOUNTANT, eR, 'enter_expense', { amount: '50000' });
+    const [om] = await pendingFor(eR, 'OPERATIONS_MANAGER');
+    await wf.decide(U.OPERATIONS_MANAGER, om.id, 'REJECTED', 'Wrong cost code');
+    assert.equal(await estatus(eR), 'NEGOTIATION_APPROVED');
+    await wf.performExpenseAction(U.ACCOUNTANT, eR, 'enter_expense', { amount: '50000' });
+    for (const r of ['OPERATIONS_MANAGER', 'HR', 'CEO'] as const) { const [a] = await pendingFor(eR, r); await wf.decide(U[r], a.id, 'APPROVED'); }
+    assert.equal(await estatus(eR), 'EXPENSE_APPROVED');
+  });
+
+  await t('a fully rejected negotiation can be revised and resubmitted', async () => {
+    const eN = await wf.createNegotiation(U.SITE_MANAGER, { category: 'Catering', vendor: 'FeedCo', negotiated_amount: '80000', negotiation_notes: 'first pass' });
+    const [om] = await pendingFor(eN, 'OPERATIONS_MANAGER');
+    await wf.decide(U.OPERATIONS_MANAGER, om.id, 'REJECTED', 'Too expensive');
+    assert.equal(await estatus(eN), 'REJECTED');
+    await denied(wf.performExpenseAction(U.OPERATIONS_MANAGER, eN, 'revise_negotiation', { category: 'Catering', vendor: 'FeedCo', negotiated_amount: '60000', negotiation_notes: 'renegotiated' }), /not permitted/);
+    await wf.performExpenseAction(U.SITE_MANAGER, eN, 'revise_negotiation', { category: 'Catering', vendor: 'FeedCo', negotiated_amount: '60000', negotiation_notes: 'renegotiated lower price' });
+    assert.equal(await estatus(eN), 'NEGOTIATION_SUBMITTED');
+    for (const r of ['OPERATIONS_MANAGER', 'HR'] as const) { const [a] = await pendingFor(eN, r); await wf.decide(U[r], a.id, 'APPROVED'); }
+    assert.equal(await estatus(eN), 'NEGOTIATION_APPROVED');
+  });
+
+  await t('reused evidence links are rejected', async () => {
+    const c7 = await wf.convertLead(U.SALES_MANAGER, await wf.createLead(U.SALES_MANAGER, { name: 'Hard4', phone: '0714' }));
+    const sA = await wf.createSale(U.SALES, { client_id: c7, property_name: 'Blaze Estate', plot_reference: 'H-4a', amount: '100' });
+    const sB = await wf.createSale(U.SALES, { client_id: c7, property_name: 'Blaze Estate', plot_reference: 'H-4b', amount: '100' });
+    const sameUrl = url('reused-proof');
+    await act(U.SALES, sA, 'submit_payment_proof', { proof_url: sameUrl, payment_reference: 'RA' });
+    await denied(act(U.SALES, sB, 'submit_payment_proof', { proof_url: sameUrl, payment_reference: 'RB' }), /already been used as evidence/);
   });
 
   console.log(`\n${pass} passed, ${fail} failed`);

@@ -12,6 +12,13 @@ export type RoundHandler = {
   onReject: (ctx: Ctx, approval: Row, comment: string) => Promise<void>;
   link: (entityId: string) => string;
   title: (ctx: Ctx, entityId: string) => Promise<string>;
+  /**
+   * Optional extra separation-of-duties check beyond "not the literal submitter of
+   * this round" (that check always applies, below). Return a message to block the
+   * decision, e.g. because this approver already signed off on the same entity at an
+   * earlier, different stage of the process.
+   */
+  conflict?: (ctx: Ctx, approval: Row, actor: Actor) => Promise<string | null>;
 };
 const handlers = new Map<string, RoundHandler>();
 export const registerRound = (round: string, h: RoundHandler) => handlers.set(round, h);
@@ -63,6 +70,10 @@ export async function decide(actor: Actor, approvalId: string, decision: 'APPROV
     if (a.status !== 'PENDING') throw new WorkflowError('This step has already been actioned');
     if (a.approver_role !== actor.role) throw new ForbiddenError(`Only ${a.approver_role.replace(/_/g, ' ')} can action this step`);
     if (a.submitted_by && a.submitted_by === actor.id) throw new ForbiddenError('You cannot approve an item you submitted (separation of duties)');
+    if (h.conflict) {
+      const problem = await h.conflict(ctx, a, actor);
+      if (problem) throw new ForbiddenError(problem);
+    }
     const blocked = await one(ctx,
       `select 1 from approvals where entity_type=$1 and entity_id=$2 and round=$3 and round_no=$4 and status='PENDING' and seq<$5 limit 1`,
       [a.entity_type, a.entity_id, a.round, a.round_no, a.seq]);

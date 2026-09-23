@@ -83,6 +83,29 @@ RECEIPT_ISSUED`.
   `expenseScope`) so a Finance Operations user's query can never even see a
   row of `sales`.
 
+## v3.1 — fixes for gaps found in review
+
+A follow-up review of v3.0 surfaced six real gaps, each verified against the code
+and then closed (with a regression test per fix, in `tests/workflow.test.ts` under
+"Hardening fixes"):
+
+| Gap | Fix |
+|---|---|
+| A stolen session cookie kept working after the password was changed or reset — sessions only checked user id, never the password | `users.session_version`: bumped on every password change/reset; the JWT carries the version it was issued under, so a bump instantly invalidates every other already-issued cookie for that account. The user's own current session is reissued so they aren't logged out by their own password change. |
+| An administrator could reset any user's password (including CEO/HR) and use the account with no accountability trail | `resetUserPassword` and role changes onto approval-critical roles now require a written reason (kept in `audit_logs`) and e-mail the affected user, so takeover or escalation is visible to the person it happened to, not just the admin doing it |
+| The Sales Manager who approved a sale earlier could also complete the chain's "Sales Manager approval" step on the same sale — same person signing off twice under two hats | `sales.gate_approved_by` records who ran `approve_sale`; the approval engine's new `conflict` hook blocks that same person from later deciding the chain's Sales Manager step |
+| An Accountant's invoice amount was never checked against what the Sales Executive originally quoted | `sales.quoted_amount` is captured at sale creation; `enter_invoice` requires a written reason for any difference over 2%, and flags it in the notification to the Sales Manager |
+| An expense could be inflated to any amount above the negotiated price by supplying any non-empty "reason" text | A hard ceiling: more than 50% above the negotiated amount is rejected outright and must go back through a fresh negotiation instead |
+| Rejecting an expense (or a vendor negotiation) was a dead end — the only way forward was starting over from scratch, discarding all the negotiated/entered detail | A rejected *negotiated* expense now recovers to `NEGOTIATION_APPROVED` for the Accountant to correct and re-enter; a rejected negotiation gets a new `revise_negotiation` action for the Site Manager to correct terms and resubmit for a fresh review round |
+| "Evidence" documents were unverified URLs — the same link could be pasted as proof more than once | Payment proof, bank payment proof and receipt links are checked against every other use of that exact link anywhere in the system and rejected if reused. (This is a partial mitigation only — it cannot verify a link's actual content, since there is no file-storage integration in this build.) |
+
+One gap from the review is **not** fixed here because it isn't really fixable in
+code: documents are links, not uploaded/verified files, so the system can never be
+fully sure a "proof" link shows what it claims to. The duplicate-link check above
+catches the laziest form of reuse but not a determined fabrication — closing this
+properly needs real file storage with checksums, which is a larger, separate
+feature.
+
 ## Security / rights hardening in this version
 
 - Session cookie carries only a user id; role, department and active flag are
@@ -129,12 +152,26 @@ RECEIPT_ISSUED`.
 
 ### First administrator
 
+A ready-made admin account is seeded by `db/seed-admin.sql`:
+
+- Email: `admin@landblaze.com`
+- Password: `EXperts2020!`
+
+Run it in the Neon SQL editor straight after `schema.sql` (see the deployment
+steps below). It logs you in directly with no forced password change, precisely
+so the very first login after deploy is not blocked on anything — but the file
+carries a loud comment reminding you to change that password immediately after
+you've confirmed access, since it's now sitting in plain text in your repo.
+
+To create *additional* admins/users later — with a password only you type, never
+written to a file — use:
+
 ```bash
-npm run hash -- 'YourStrongPassword1' admin@landblaze.com "System Administrator"
+npm run hash -- 'YourStrongPassword1' someone@landblaze.com "Their Full Name"
 ```
 
-This prints an `INSERT` statement — run it in the Neon SQL editor after
-`schema.sql`. The account is forced to change its password on first login.
+This prints an `INSERT` statement to run in the Neon SQL editor. That account
+*is* forced to change its password on first login (unlike the seeded one above).
 
 ## Environment variables
 
@@ -159,13 +196,51 @@ npm test        # 30 tests: every row of the process sheet + the rights matrix,
 npm run typecheck
 ```
 
-## Deploy
+## Deploy step by step
 
-1. Push this directory to GitHub.
-2. Import the repo into Vercel.
-3. Add `DATABASE_URL` and `AUTH_SECRET` (and optionally `APP_URL`,
-   `RESEND_API_KEY`, `MAIL_FROM`) as Vercel environment variables.
-4. Run `db/schema.sql` in the Neon SQL editor (or `db/upgrade-v2-to-v3.sql`
-   first if migrating from v2 with live data).
-5. Create the first administrator (see above).
-6. Deploy.
+**1. Create the Neon database.**
+At [neon.tech](https://neon.tech), create a project (any region). Open the
+**SQL Editor** for it — you'll use this in steps 4–5. Copy the **connection
+string** from the dashboard (the pooled one, starting `postgresql://…`) — you'll
+need it in step 3.
+
+**2. Push this code to GitHub.**
+Unzip this project, `git init`, commit, and push it to a new GitHub repository.
+(If you're migrating from an earlier v2 deployment with live data, keep that
+repo/history — just replace its contents with this one and commit on top.)
+
+**3. Import the repo into Vercel and set environment variables.**
+At [vercel.com](https://vercel.com) → **Add New → Project** → import the GitHub
+repo. Before the first deploy (or right after, then redeploy), add these under
+**Settings → Environment Variables**:
+
+| Variable | Required | Value |
+|---|---|---|
+| `DATABASE_URL` | Yes | The Neon connection string from step 1 |
+| `AUTH_SECRET` | Yes | 32+ random characters — generate with `openssl rand -base64 48` |
+| `APP_URL` | No | Your Vercel URL (e.g. `https://landblaze.vercel.app`), used for links in e-mails |
+| `RESEND_API_KEY` | No | Only if you want e-mail notifications, from resend.com |
+| `MAIL_FROM` | No | e.g. `Landblaze <notifications@yourdomain.com>` — required if `RESEND_API_KEY` is set |
+
+**4. Create the database schema.**
+In the Neon SQL Editor, open `db/schema.sql` from this project, paste its full
+contents, and run it. (Migrating from a live v2 database instead? Run
+`db/upgrade-v2-to-v3.sql` first, then `schema.sql` — it's safe to run on top,
+it only adds what's missing.)
+
+**5. Seed the first administrator.**
+Still in the Neon SQL Editor, paste and run `db/seed-admin.sql`. This creates
+`admin@landblaze.com` / `EXperts2020!` with the ADMIN role.
+
+**6. Deploy.**
+Back in Vercel, trigger the deploy (it will have already tried once when you
+imported the repo — if environment variables weren't set yet at that point,
+just click **Redeploy** now that they are).
+
+**7. Log in and lock the account down.**
+Open your Vercel URL, sign in with `admin@landblaze.com` / `EXperts2020!`,
+then immediately click **Change password** at the bottom of the sidebar and
+set a real password. From there, use **Users & Roles** in the sidebar to create
+accounts for everyone else — each of those goes through the forced
+change-password-on-first-login flow, so this seeded account is the only one
+that ever needs this manual step.
