@@ -3,6 +3,8 @@ import { notFound } from 'next/navigation';
 import { requireCap } from '@/lib/guard';
 import { getExpense } from '@/lib/queries';
 import { Badge } from '@/components/Badge';
+import { ApprovalDecisionPanel } from '@/components/ApprovalDecisionPanel';
+import { ApprovalDecisionPanel } from '@/components/ApprovalDecisionPanel';
 import { naira, fmtDateTime, human } from '@/lib/format';
 import { availableExpenseActions } from '@/lib/workflow/expense';
 import { EXPENSE_STATUS_LABEL } from '@/lib/constants';
@@ -13,7 +15,7 @@ export default async function ExpenseDetail({ params }: { params: Promise<{ id: 
   const s = await requireCap('expense.read', 'expense.read_all', 'finance.workspace');
   const data = await getExpense(s, id);
   if (!data) notFound();
-  const { expense: e, events, approvals } = data;
+  const { expense: e, events, approvals, actionableApproval } = data;
   const actions = availableExpenseActions(e as any, s).map(a => ({ key: a.key, label: a.label, help: a.help, danger: a.danger, fields: a.fields }));
 
   return (
@@ -37,6 +39,8 @@ export default async function ExpenseDetail({ params }: { params: Promise<{ id: 
         </div>
         <div className="card"><h3>Your action</h3><ExpenseActionPanel expenseId={e.id} actions={actions} /></div>
       </div>
+
+      <ApprovalDecisionPanel approval={actionableApproval} />
 
       <div className="card" style={{ marginTop: 15 }}>
         <h3>Approval chain</h3>

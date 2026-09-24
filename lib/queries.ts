@@ -27,14 +27,15 @@ export async function getSale(u: U, id: string) {
     where s.id=${id}::uuid and (${sc.all}::boolean or (${sc.own}::boolean and s.created_by=${sc.uid}::uuid) or s.status = any(${sc.statuses}::text[]))`;
   const sale = rows[0];
   if (!sale) return null;
-  const [docs, events, approvals, records, tasks] = await Promise.all([
+  const [docs, events, approvals, records, tasks, actionableApproval] = await Promise.all([
     sql`select d.*, u.name uploader from sale_documents d left join users u on u.id=d.uploaded_by where d.sale_id=${id}::uuid order by d.created_at`,
     sql`select e.*, u.name actor, u.role actor_role from workflow_events e left join users u on u.id=e.actor_id where e.entity_type='SALE' and e.entity_id=${id}::uuid order by e.created_at desc`,
     sql`select a.*, u.name acted_by_name from approvals a left join users u on u.id=a.acted_by where a.entity_type='SALE' and a.entity_id=${id}::uuid order by a.round_no, a.seq, a.created_at`,
     sql`select r.*, u.name creator from site_records r left join users u on u.id=r.created_by where r.sale_id=${id}::uuid order by r.created_at desc`,
     sql`select * from operations where sale_id=${id}::uuid order by created_at`,
+    actionableApprovalForEntity(u, 'SALE', id),
   ]);
-  return { sale, docs, events, approvals, records, tasks };
+  return { sale, docs, events, approvals, records, tasks, actionableApproval };
 }
 
 export async function listClients(limit = 200) {
@@ -81,14 +82,38 @@ export async function getExpense(u: U, id: string) {
     left join sales s on s.id=e.sale_id left join users b on b.id=e.submitted_by
     where e.id=${id}::uuid and (${sc.all}::boolean or e.submitted_by=${sc.uid}::uuid)`;
   if (!rows[0]) return null;
-  const [events, approvals] = await Promise.all([
+  const [events, approvals, actionableApproval] = await Promise.all([
     sql`select e.*, u.name actor, u.role actor_role from workflow_events e left join users u on u.id=e.actor_id where e.entity_type='EXPENSE' and e.entity_id=${id}::uuid order by e.created_at desc`,
     sql`select a.*, u.name acted_by_name from approvals a left join users u on u.id=a.acted_by where a.entity_type='EXPENSE' and a.entity_id=${id}::uuid order by a.round_no, a.seq, a.created_at`,
+    actionableApprovalForEntity(u, 'EXPENSE', id),
   ]);
-  return { expense: rows[0], events, approvals };
+  return { expense: rows[0], events, approvals, actionableApproval };
 }
 
 // ---------------------------------------------------------------- Approvals
+/** Return one approval step this user can act on for a specific record. */
+export async function actionableApprovalForEntity(u: U, entityType: 'SALE' | 'EXPENSE', entityId: string) {
+  if (!/^[0-9a-f-]{36}$/i.test(entityId)) return null;
+  const rows = await sql`
+    select a.*, coalesce(s.client_name, e.vendor) subject,
+           coalesce(s.plot_reference, e.category) detail,
+           coalesce(s.amount, e.amount, e.negotiated_amount) amount,
+           sub.name submitted_by_name
+    from approvals a
+    left join sales s on a.entity_type='SALE' and s.id=a.entity_id
+    left join expenses e on a.entity_type='EXPENSE' and e.id=a.entity_id
+    left join users sub on sub.id=a.submitted_by
+    where a.entity_type=${entityType} and a.entity_id=${entityId}::uuid
+      and a.status='PENDING' and a.approver_role=${u.role}
+      and a.submitted_by is distinct from ${u.id}::uuid
+      and not exists (
+        select 1 from approvals p where p.entity_type=a.entity_type and p.entity_id=a.entity_id
+          and p.round=a.round and p.round_no=a.round_no and p.status='PENDING' and p.seq<a.seq
+      )
+    order by a.seq, a.created_at limit 1`;
+  return rows[0] ?? null;
+}
+
 /** Approval steps this user can act on right now: earlier steps done, role matches, not self-submitted. */
 export async function actionableApprovals(u: U) {
   return sql`

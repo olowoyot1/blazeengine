@@ -3,6 +3,8 @@ import { notFound } from 'next/navigation';
 import { requireCap } from '@/lib/guard';
 import { getSale } from '@/lib/queries';
 import { Badge } from '@/components/Badge';
+import { ApprovalDecisionPanel } from '@/components/ApprovalDecisionPanel';
+import { ApprovalDecisionPanel } from '@/components/ApprovalDecisionPanel';
 import { naira, fmtDateTime, human } from '@/lib/format';
 import { availableSaleActions } from '@/lib/workflow/sale';
 import { SALE_STATUS_ORDER, SALE_STATUS_LABEL } from '@/lib/constants';
@@ -15,7 +17,7 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
   const s = await requireCap('sale.read', 'sale.read_all');
   const data = await getSale(s, id);
   if (!data) notFound();
-  const { sale, docs, events, approvals, records, tasks } = data;
+  const { sale, docs, events, approvals, records, tasks, actionableApproval } = data;
   const actions = availableSaleActions(sale as any, s).map(a => ({ key: a.key, label: a.label, help: a.help, danger: a.danger, fields: a.fields }));
   const curIdx = MAIN_LINE.indexOf(sale.status);
 
@@ -50,6 +52,8 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
           <SaleActionPanel saleId={sale.id} actions={actions} />
         </div>
       </div>
+
+      <ApprovalDecisionPanel approval={actionableApproval} />
 
       <div className="grid2" style={{ marginTop: 15 }}>
         <div className="card">
