@@ -4,6 +4,7 @@
  */
 import { PGlite } from '@electric-sql/pglite';
 import { readFileSync } from 'node:fs';
+import crypto from 'node:crypto';
 import assert from 'node:assert/strict';
 
 const pg = new PGlite();
@@ -47,7 +48,10 @@ async function main() {
   const unread = async (userId: string) => Number(((await pg.query(`select count(*) n from notifications where user_id=$1`, [userId])).rows[0] as any).n);
   const pendingFor = async (id: string, role: string) => (await pg.query(`select * from approvals where entity_id=$1 and approver_role=$2 and status='PENDING' order by created_at`, [id, role])).rows as any[];
   const act = (a: wf.Actor, id: string, key: string, input: any = {}) => wf.performSaleAction(a, id, key, input);
-  const url = (n: string) => `https://files.example.com/${n}.pdf`;
+  // File fields now only accept our own /api/files/<uuid> paths (produced by an
+  // actual upload), so tests fabricate a stable, distinct fake path per name —
+  // preserving the "same link reused" duplicate-evidence test below.
+  const url = (n: string) => `/api/files/${crypto.createHash('md5').update(n).digest('hex').replace(/^(.{8})(.{4})(.{4})(.{4})(.{12}).*/, '$1-$2-$3-$4-$5')}`;
 
   console.log('\nRights matrix');
   await t('ADMIN manages users but cannot act in workflow', async () => {
@@ -91,7 +95,7 @@ async function main() {
     await denied(act(U.ACCOUNTANT, sale, 'submit_payment_proof', { proof_url: url('p'), payment_reference: 'R1' }), /not permitted/);
     await denied(act(SALES2, sale, 'submit_payment_proof', { proof_url: url('p'), payment_reference: 'R1' }), /only act on sales you created/);
     await denied(act(U.ACCOUNTANT, sale, 'enter_invoice', { invoice_number: 'I1', invoice_amount: '5000000' }), /Not available while/);
-    await denied(act(U.SALES, sale, 'submit_payment_proof', { proof_url: 'javascript:alert(1)', payment_reference: 'R1' }), /valid link|http/);
+    await denied(act(U.SALES, sale, 'submit_payment_proof', { proof_url: 'javascript:alert(1)', payment_reference: 'R1' }), /please upload the file/);
   });
   await t('row1: sales uploads payment proof → accountant notified', async () => {
     await act(U.SALES, sale, 'submit_payment_proof', { proof_url: url('proof'), payment_reference: 'R1', amount_paid: '5000000' });
@@ -117,7 +121,7 @@ async function main() {
     assert.ok(await unread(U.OPERATIONS.id) >= 1);
   });
   await t('row3: operations creates contract & deed → accounts notified', async () => {
-    await denied(act(U.OPERATIONS, sale, 'create_contract', { contract_url: url('c') }), /Deed link is required/);
+    await denied(act(U.OPERATIONS, sale, 'create_contract', { contract_url: url('c') }), /Deed document is required/);
     await act(U.OPERATIONS, sale, 'create_contract', { contract_url: url('c'), deed_url: url('d') });
     assert.equal(await status(sale), 'CONTRACT_PREPARED');
   });
@@ -136,7 +140,7 @@ async function main() {
   });
   await t('site manager cannot audit before ops docs; ops must upload both docs', async () => {
     await denied(act(U.SITE_MANAGER, sale, 'final_audit', { audit_findings: 'ok', confirmed: 'on' }), /Not available/);
-    await denied(act(U.OPERATIONS, sale, 'upload_allocation_docs', { deed_of_assignment_url: url('doa') }), /Survey plan link is required/);
+    await denied(act(U.OPERATIONS, sale, 'upload_allocation_docs', { deed_of_assignment_url: url('doa') }), /Survey plan is required/);
   });
   await t('row7: operations uploads deed of assignment + survey', async () => {
     await act(U.OPERATIONS, sale, 'upload_allocation_docs', { deed_of_assignment_url: url('doa'), survey_plan_url: url('sv') });
@@ -359,6 +363,44 @@ async function main() {
     const sameUrl = url('reused-proof');
     await act(U.SALES, sA, 'submit_payment_proof', { proof_url: sameUrl, payment_reference: 'RA' });
     await denied(act(U.SALES, sB, 'submit_payment_proof', { proof_url: sameUrl, payment_reference: 'RB' }), /already been used as evidence/);
+  });
+
+  console.log('\nNew features');
+  await t('client profile can be completed after conversion, role-gated, email validated', async () => {
+    const leadId = await wf.createLead(U.MARKETER, { name: 'Profile Test', phone: '0722' });
+    const clientId = await wf.convertLead(U.MARKETER, leadId);
+    const before = (await pg.query(`select profile_completed_at from clients where id=$1`, [clientId])).rows[0] as any;
+    assert.equal(before.profile_completed_at, null);
+    await denied(wf.updateClientProfile(U.ACCOUNTANT, clientId, { name: 'x' }), /cannot edit client profiles/);
+    await denied(wf.updateClientProfile(U.MARKETER, clientId, { name: 'Profile Test', email: 'not-an-email' }), /Email address is not valid/);
+    await wf.updateClientProfile(U.MARKETER, clientId, {
+      name: 'Profile Test', phone: '0722', email: 'profile@test.io', address: '12 Blaze Rd',
+      occupation: 'Engineer', id_type: 'NATIONAL_ID', id_number: 'N123', next_of_kin_name: 'Kin Name', next_of_kin_phone: '0733',
+    });
+    const after = (await pg.query(`select profile_completed_at, occupation from clients where id=$1`, [clientId])).rows[0] as any;
+    assert.ok(after.profile_completed_at);
+    assert.equal(after.occupation, 'Engineer');
+  });
+
+  await t('default departments are seeded and admin can add more', async () => {
+    const rows = (await pg.query(`select name from departments order by name`)).rows as any[];
+    assert.ok(rows.some(r => r.name === 'Sales & Marketing'));
+    assert.ok(rows.some(r => r.name === 'Site Management'));
+    assert.ok(rows.length >= 7);
+  });
+
+  await t('SUPER_ADMIN role is accepted by the users table constraint', async () => {
+    const row = (await pg.query(`insert into users(name,email,password_hash,role) values('SA Test','sa-test@t.io','x','SUPER_ADMIN') returning role`)).rows[0] as any;
+    assert.equal(row.role, 'SUPER_ADMIN');
+  });
+
+  await t('file-type fields only accept our own /api/files/ paths, not arbitrary links', async () => {
+    const leadId2 = await wf.createLead(U.SALES, { name: 'File Test', phone: '0744' });
+    const clientId2 = await wf.convertLead(U.SALES, leadId2);
+    const s9 = await wf.createSale(U.SALES, { client_id: clientId2, property_name: 'Blaze Estate', plot_reference: 'F-1', amount: '100' });
+    await denied(act(U.SALES, s9, 'submit_payment_proof', { proof_url: 'https://example.com/proof.pdf', payment_reference: 'RF1' }), /please upload the file/);
+    await act(U.SALES, s9, 'submit_payment_proof', { proof_url: url('filetest'), payment_reference: 'RF1' });
+    assert.equal(await status(s9), 'PAYMENT_PROOF_SUBMITTED');
   });
 
   console.log(`\n${pass} passed, ${fail} failed`);

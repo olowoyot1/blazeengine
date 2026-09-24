@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS users(
   name text NOT NULL,
   email text UNIQUE NOT NULL,
   password_hash text NOT NULL,
-  role text NOT NULL CHECK (role IN ('ADMIN','CEO','HR','SALES_MANAGER','SALES','MARKETER','ACCOUNTANT','FINANCE_OPERATIONS','OPERATIONS_MANAGER','OPERATIONS','SITE_MANAGER')),
+  role text NOT NULL CHECK (role IN ('SUPER_ADMIN','ADMIN','CEO','HR','SALES_MANAGER','SALES','MARKETER','ACCOUNTANT','FINANCE_OPERATIONS','OPERATIONS_MANAGER','OPERATIONS','SITE_MANAGER')),
   department text,
   active boolean NOT NULL DEFAULT true,
   must_change_password boolean NOT NULL DEFAULT false,
@@ -17,14 +17,48 @@ CREATE TABLE IF NOT EXISTS users(
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS departments(
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text UNIQUE NOT NULL,
+  active boolean NOT NULL DEFAULT true,
+  created_by uuid REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Uploaded evidence files (receipts, payment proofs, contracts, deeds, ID scans…)
+-- stored as bytes in Postgres rather than as external links, so "proof" is an
+-- actual file the system holds, not a URL anyone could type or reuse. Served back
+-- through /api/files/[id], which requires a signed-in session.
+CREATE TABLE IF NOT EXISTS uploaded_files(
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  filename text NOT NULL,
+  mime_type text NOT NULL CHECK (mime_type IN ('application/pdf','image/png','image/jpeg')),
+  size_bytes int NOT NULL,
+  data bytea NOT NULL,
+  uploaded_by uuid REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS clients(
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   lead_id uuid,
   name text NOT NULL,
   phone text,
   email text,
+  address text,
+  date_of_birth date,
+  occupation text,
+  employer text,
+  id_type text,
+  id_number text,
+  alternate_phone text,
+  next_of_kin_name text,
+  next_of_kin_phone text,
+  next_of_kin_relationship text,
+  profile_completed_at timestamptz,
   created_by uuid REFERENCES users(id),
-  created_at timestamptz NOT NULL DEFAULT now()
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS leads(
@@ -197,6 +231,13 @@ CREATE INDEX IF NOT EXISTS idx_approvals_pending ON approvals(status, approver_r
 CREATE INDEX IF NOT EXISTS idx_events_entity ON workflow_events(entity_type, entity_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, read_at, created_at);
 CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_logs(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_clients_lead ON clients(lead_id);
+
+-- Default departments (admin can add/retire more from Users & Roles).
+INSERT INTO departments(name) VALUES
+  ('Management'), ('Human Resources'), ('Sales & Marketing'), ('Accounts'),
+  ('Finance Operations'), ('Operations'), ('Site Management')
+ON CONFLICT (name) DO NOTHING;
 
 -- v3.1 hardening additions: safe to run again on a database that already has v3.0's
 -- schema.sql applied (all columns/index below are IF NOT EXISTS / idempotent).
@@ -205,3 +246,20 @@ ALTER TABLE sales ADD COLUMN IF NOT EXISTS quoted_amount numeric(14,2);
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS gate_approved_by uuid REFERENCES users(id);
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS invoice_variance_reason text;
 UPDATE sales SET quoted_amount = amount WHERE quoted_amount IS NULL;
+
+-- v3.2 additions: SUPER_ADMIN role, managed departments, real file uploads, client
+-- profiles. Safe to run again on a database that already has v3.0/v3.1 applied.
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('SUPER_ADMIN','ADMIN','CEO','HR','SALES_MANAGER','SALES','MARKETER','ACCOUNTANT','FINANCE_OPERATIONS','OPERATIONS_MANAGER','OPERATIONS','SITE_MANAGER'));
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS address text;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS date_of_birth date;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS occupation text;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS employer text;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS id_type text;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS id_number text;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS alternate_phone text;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS next_of_kin_name text;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS next_of_kin_phone text;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS next_of_kin_relationship text;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS profile_completed_at timestamptz;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();

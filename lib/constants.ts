@@ -1,11 +1,12 @@
 export const ROLES = [
-  'ADMIN', 'CEO', 'HR', 'SALES_MANAGER', 'SALES', 'MARKETER', 'ACCOUNTANT',
+  'SUPER_ADMIN', 'ADMIN', 'CEO', 'HR', 'SALES_MANAGER', 'SALES', 'MARKETER', 'ACCOUNTANT',
   'FINANCE_OPERATIONS', 'OPERATIONS_MANAGER', 'OPERATIONS', 'SITE_MANAGER',
 ] as const;
 export type Role = (typeof ROLES)[number];
 
 export const ROLE_META: Record<Role, { label: string; department: string }> = {
-  ADMIN: { label: 'System Administrator', department: 'Management' },
+  SUPER_ADMIN: { label: 'Super Administrator', department: 'Management' },
+  ADMIN: { label: 'Administrator', department: 'Management' },
   CEO: { label: 'CEO', department: 'Management' },
   HR: { label: 'HR (Internal Audit)', department: 'Human Resources' },
   SALES_MANAGER: { label: 'Sales Manager', department: 'Sales & Marketing' },

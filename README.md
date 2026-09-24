@@ -83,6 +83,47 @@ RECEIPT_ISSUED`.
   `expenseScope`) so a Finance Operations user's query can never even see a
   row of `sales`.
 
+## v3.2 — real file uploads, client profiles, departments, SUPER_ADMIN, performance reporting
+
+Five feature additions on top of v3.1:
+
+- **Real file uploads, not links.** Every document field that used to accept a URL
+  (payment proof, contract, deed, deed of assignment, survey plan, soft copy, bank
+  payment screenshot, receipt, negotiation support docs) now uploads an actual PDF,
+  PNG or JPEG (max 4MB) through `/api/files`, stored as bytes in Postgres
+  (`uploaded_files` table) and served back through `/api/files/[id]`, which requires
+  a signed-in session. Nobody can type a link as "proof" anymore — this also fully
+  closes the "evidence is just an unverified URL" gap noted in the v3.1 review.
+- **Client profiles.** Converting a lead now takes you straight to `/clients/[id]`
+  with a profile form: address, date of birth, occupation, employer, means of ID +
+  number, alternate phone, next of kin. The Leads page flags each client as
+  "Complete" or "Incomplete" so nothing gets missed.
+- **Managed departments.** Admins can add or retire departments from **Users &
+  Roles** instead of the department field being free text — new users pick from
+  that list.
+- **SUPER_ADMIN — an admin hierarchy.** A plain `ADMIN` can create, promote,
+  deactivate, or reset the password of any ordinary staff account, but **cannot**
+  touch another `ADMIN` or `SUPER_ADMIN` account at all — only a `SUPER_ADMIN` can.
+  This closes the "one admin can quietly take over another admin's account" gap
+  from the v3.1 review: that authority now sits with a smaller, higher tier instead
+  of every admin equally. The seeded bootstrap account (`db/seed-admin.sql`) is now
+  `SUPER_ADMIN`, not `ADMIN`, so you have that authority from the first login.
+- **Staff & company performance reporting.** New "Staff performance" (sales closed,
+  approval throughput and turnaround, leads captured/converted, general activity —
+  per person) and "Company performance" (total/monthly revenue, lead→sale
+  conversion rate, average sale cycle time, 48h approval-SLA compliance) sections
+  at the top of Reports, visible to `SUPER_ADMIN`, `ADMIN`, `CEO` and `HR`.
+
+**If you already deployed** (per the steps below), re-run the updated
+`db/schema.sql` in the Neon SQL Editor — it's idempotent and only adds what's
+missing (new tables, new columns, and widens the `users.role` check constraint to
+allow `SUPER_ADMIN`). Your existing `admin@landblaze.com` account keeps whatever
+role it currently has; it does **not** get automatically upgraded to `SUPER_ADMIN` —
+if you want that, run this once in the Neon SQL Editor:
+```sql
+update users set role = 'SUPER_ADMIN' where email = 'admin@landblaze.com';
+```
+
 ## v3.1 — fixes for gaps found in review
 
 A follow-up review of v3.0 surfaced six real gaps, each verified against the code

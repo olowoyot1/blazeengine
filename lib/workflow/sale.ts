@@ -76,7 +76,7 @@ export const SALE_ACTIONS: SaleAction[] = [
     help: 'Client has paid. Attach the payment proof link and reference – Accounts is notified.',
     roles: ['SALES', 'SALES_MANAGER'], from: ['DRAFT'], to: 'PAYMENT_PROOF_SUBMITTED',
     fields: [
-      { name: 'proof_url', label: 'Payment proof link', type: 'url', required: true, placeholder: 'https://…' },
+      { name: 'proof_url', label: 'Payment proof', type: 'file', required: true },
       { name: 'payment_reference', label: 'Payment reference', type: 'text', required: true },
       { name: 'amount_paid', label: 'Amount paid (₦)', type: 'number', min: 1 },
     ],
@@ -106,7 +106,7 @@ export const SALE_ACTIONS: SaleAction[] = [
     fields: [
       { name: 'invoice_number', label: 'Invoice number', type: 'text', required: true },
       { name: 'invoice_amount', label: 'Invoice amount (₦)', type: 'number', required: true, min: 1 },
-      { name: 'invoice_url', label: 'Invoice link (optional)', type: 'url' },
+      { name: 'invoice_url', label: 'Invoice document (optional)', type: 'file' },
       { name: 'variance_reason', label: 'Reason for amount differing from the original quote (if applicable)', type: 'textarea' },
     ],
     async apply(ctx, s, i) {
@@ -158,8 +158,8 @@ export const SALE_ACTIONS: SaleAction[] = [
     help: 'Operations prepares the contract and deed. On submission the sale goes back to Accounts.',
     roles: OPS, from: ['SALES_APPROVED'], to: 'CONTRACT_PREPARED',
     fields: [
-      { name: 'contract_url', label: 'Contract link', type: 'url', required: true },
-      { name: 'deed_url', label: 'Deed link', type: 'url', required: true },
+      { name: 'contract_url', label: 'Contract document', type: 'file', required: true },
+      { name: 'deed_url', label: 'Deed document', type: 'file', required: true },
     ],
     async apply(ctx, s, i) {
       await addDoc(ctx, s.id, 'CONTRACT', i.contract_url, 'Contract');
@@ -176,7 +176,7 @@ export const SALE_ACTIONS: SaleAction[] = [
       { name: 'sales_order_no', label: 'Sales order no.', type: 'text', required: true },
       { name: 'sales_receipt_no', label: 'Sales receipt no.', type: 'text', required: true },
       { name: 'sales_invoice_no', label: 'Sales invoice no.', type: 'text', required: true },
-      { name: 'documents_url', label: 'Documents bundle link (optional)', type: 'url' },
+      { name: 'documents_url', label: 'Documents bundle (optional)', type: 'file' },
     ],
     async apply(ctx, s, i) {
       await ctx.tx.query(`update sales set sales_order_no=$2, sales_receipt_no=$3, sales_invoice_no=$4 where id=$1`,
@@ -204,8 +204,8 @@ export const SALE_ACTIONS: SaleAction[] = [
     help: `Upload both documents to the portal (due ${ALLOCATION_WINDOW_DAYS} days after the portal was opened). The Site Manager is notified.`,
     roles: OPS, from: ['SITE_NOTIFIED', 'RETURNED'], to: 'OPS_DOCS_UPLOADED',
     fields: [
-      { name: 'deed_of_assignment_url', label: 'Deed of assignment link', type: 'url', required: true },
-      { name: 'survey_plan_url', label: 'Survey plan link', type: 'url', required: true },
+      { name: 'deed_of_assignment_url', label: 'Deed of assignment', type: 'file', required: true },
+      { name: 'survey_plan_url', label: 'Survey plan', type: 'file', required: true },
     ],
     async apply(ctx, s, i) {
       await addDoc(ctx, s.id, 'DEED_OF_ASSIGNMENT', i.deed_of_assignment_url, 'Deed of assignment');
@@ -245,7 +245,7 @@ export const SALE_ACTIONS: SaleAction[] = [
     help: 'Send the soft copy to the client and commence pre-allocation: site survey, logistics and feeding.',
     roles: ['SITE_MANAGER'], from: ['FULLY_APPROVED'], to: 'PRE_ALLOCATION',
     fields: [
-      { name: 'soft_copy_url', label: 'Soft copy link (sent to client)', type: 'url', required: true },
+      { name: 'soft_copy_url', label: 'Soft copy (sent to client)', type: 'file', required: true },
       { name: 'site_survey_plan', label: 'Site survey plan / schedule', type: 'textarea', required: true },
       { name: 'logistics_notes', label: 'Logistics & feeding arrangements', type: 'textarea', required: true },
     ],

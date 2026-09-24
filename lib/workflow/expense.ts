@@ -69,7 +69,7 @@ export const EXPENSE_ACTIONS: ExpenseAction[] = [
     help: 'After paying through the bank, upload the screenshot to the portal. Ops Manager & HR review first, then the CEO.',
     roles: ['FINANCE_OPERATIONS'], from: ['EXPENSE_APPROVED'], to: 'PAYMENT_PROOF_UPLOADED',
     fields: [
-      { name: 'bank_proof_url', label: 'Bank screenshot link', type: 'url', required: true },
+      { name: 'bank_proof_url', label: 'Bank payment screenshot', type: 'file', required: true },
       { name: 'bank_reference', label: 'Bank transfer reference', type: 'text', required: true },
     ],
     async apply(ctx, e, i) {
@@ -102,7 +102,7 @@ export const EXPENSE_ACTIONS: ExpenseAction[] = [
       { name: 'vendor', label: 'Vendor', type: 'text', required: true },
       { name: 'negotiated_amount', label: 'Negotiated amount (₦)', type: 'number', required: true, min: 1 },
       { name: 'negotiation_notes', label: 'What changed', type: 'textarea', required: true },
-      { name: 'negotiation_url', label: 'Supporting document link', type: 'url' },
+      { name: 'negotiation_url', label: 'Supporting document (optional)', type: 'file' },
     ],
     async apply(ctx, e, i) {
       if (e.origin !== 'NEGOTIATION') throw new WorkflowError('Only a negotiated expense can be revised — enter a new direct expense instead');
@@ -121,7 +121,7 @@ export const EXPENSE_ACTIONS: ExpenseAction[] = [
     roles: ['ACCOUNTANT'], from: ['PAID'], to: 'RECEIPT_ISSUED',
     fields: [
       { name: 'receipt_no', label: 'Receipt number', type: 'text', required: true },
-      { name: 'receipt_url', label: 'Receipt link', type: 'url', required: true },
+      { name: 'receipt_url', label: 'Receipt document', type: 'file', required: true },
     ],
     async apply(ctx, e, i) {
       await assertFreshEvidence(ctx, i.receipt_url, 'receipt');
@@ -164,7 +164,7 @@ export async function createNegotiation(actor: Actor, input: Record<string, unkn
     { name: 'vendor', label: 'Vendor', type: 'text', required: true },
     { name: 'negotiated_amount', label: 'Negotiated amount (₦)', type: 'number', required: true, min: 1 },
     { name: 'negotiation_notes', label: 'Negotiation details', type: 'textarea', required: true },
-    { name: 'negotiation_url', label: 'Supporting document link', type: 'url' },
+    { name: 'negotiation_url', label: 'Supporting document (optional)', type: 'file' },
   ], input);
   return run(actor, async ctx => {
     if (p.sale_id) {

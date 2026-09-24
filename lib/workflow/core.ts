@@ -79,8 +79,10 @@ export function mailClient(ctx: Ctx, to: string | null | undefined, subject: str
 
 export type Field = {
   name: string; label: string;
-  type: 'text' | 'textarea' | 'number' | 'date' | 'url' | 'select' | 'checkbox';
+  type: 'text' | 'textarea' | 'number' | 'date' | 'url' | 'select' | 'checkbox' | 'file';
   required?: boolean; options?: string[]; placeholder?: string; min?: number;
+  /** file only: which MIME types the upload endpoint accepts, for the picker's hint. */
+  accept?: string[];
 };
 export type Parsed = Record<string, string | number | boolean | null>;
 
@@ -116,6 +118,12 @@ export function parseFields(fields: Field[], input: Record<string, unknown>): Pa
         let u: URL;
         try { u = new URL(s); } catch { throw new WorkflowError(`${f.label} must be a valid link (https://…)`); }
         if (!['http:', 'https:'].includes(u.protocol)) throw new WorkflowError(`${f.label} must be an http(s) link`);
+        out[f.name] = s; break;
+      }
+      case 'file': {
+        // Value is never typed by the user — the browser already uploaded the file
+        // via /api/files and put the resulting path here. Only accept our own format.
+        if (!/^\/api\/files\/[0-9a-f-]{36}$/i.test(s)) throw new WorkflowError(`${f.label}: please upload the file (don't paste a link)`);
         out[f.name] = s; break;
       }
       case 'select': {

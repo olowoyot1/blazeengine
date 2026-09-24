@@ -1,4 +1,5 @@
 import Shell from '@/components/Shell';
+import Link from 'next/link';
 import { requireCap } from '@/lib/guard';
 import { listLeads, listClients, leadsToday } from '@/lib/queries';
 import { DAILY_LEAD_TARGET } from '@/lib/constants';
@@ -34,8 +35,12 @@ export default async function Leads() {
 
       <div className="card" style={{ marginTop: 15 }}>
         <div className="section-title"><h3>Clients</h3><span className="badge">{clients.length}</span></div>
-        <div className="table-wrap"><table className="table"><thead><tr><th>Client</th><th>Phone</th><th>Email</th><th>Active sales</th></tr></thead>
-          <tbody>{clients.map((c: any) => <tr key={c.id}><td>{c.name}</td><td>{c.phone || '—'}</td><td>{c.email || '—'}</td><td>{c.sales_count}</td></tr>)}</tbody>
+        <div className="table-wrap"><table className="table"><thead><tr><th>Client</th><th>Phone</th><th>Email</th><th>Active sales</th><th>Profile</th><th></th></tr></thead>
+          <tbody>{clients.map((c: any) => (
+            <tr key={c.id}><td>{c.name}</td><td>{c.phone || '—'}</td><td>{c.email || '—'}</td><td>{c.sales_count}</td>
+              <td>{c.profile_completed_at ? <span className="badge green">Complete</span> : <span className="badge yellow">Incomplete</span>}</td>
+              <td><Link className="btn light" href={`/clients/${c.id}`}>Open</Link></td></tr>
+          ))}</tbody>
         </table></div>
       </div>
     </Shell>

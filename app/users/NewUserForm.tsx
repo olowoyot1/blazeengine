@@ -2,9 +2,8 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { createUser } from '@/lib/actions';
-import { ROLES } from '@/lib/constants';
 
-export function NewUserForm() {
+export function NewUserForm({ assignableRoles, departments }: { assignableRoles: readonly string[]; departments: string[] }) {
   const [v, setV] = useState<Record<string, string>>({});
   const [error, setError] = useState(''); const [ok, setOk] = useState('');
   const [pending, start] = useTransition();
@@ -28,10 +27,15 @@ export function NewUserForm() {
         <div><label className="field">Role *</label>
           <select className="select" required value={v.role ?? ''} onChange={e => set('role', e.target.value)}>
             <option value="" disabled>Select role…</option>
-            {ROLES.map(r => <option key={r} value={r}>{r.replace(/_/g, ' ')}</option>)}
+            {assignableRoles.map(r => <option key={r} value={r}>{r.replace(/_/g, ' ')}</option>)}
           </select>
         </div>
-        <div><label className="field">Department</label><input className="input" value={v.department ?? ''} onChange={e => set('department', e.target.value)} /></div>
+        <div><label className="field">Department</label>
+          <select className="select" value={v.department ?? ''} onChange={e => set('department', e.target.value)}>
+            <option value="">None</option>
+            {departments.map(d => <option key={d} value={d}>{d}</option>)}
+          </select>
+        </div>
         <div className="full-row"><label className="field">Temporary password *</label><input className="input" type="text" required minLength={10} value={v.password ?? ''} onChange={e => set('password', e.target.value)} placeholder="At least 10 characters, letters and numbers" /></div>
       </div>
       <button className="btn primary" disabled={pending}>{pending ? 'Creating…' : 'Create user'}</button>

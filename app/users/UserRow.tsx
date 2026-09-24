@@ -2,12 +2,12 @@
 import { Fragment, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { setUserRole, setUserActive, resetUserPassword } from '@/lib/actions';
-import { ROLES } from '@/lib/constants';
 import { Badge } from '@/components/Badge';
 
-const CRITICAL = new Set(['CEO', 'HR', 'SALES_MANAGER', 'OPERATIONS_MANAGER', 'FINANCE_OPERATIONS', 'SITE_MANAGER', 'ACCOUNTANT']);
+const CRITICAL = new Set(['CEO', 'HR', 'SALES_MANAGER', 'OPERATIONS_MANAGER', 'FINANCE_OPERATIONS', 'SITE_MANAGER', 'ACCOUNTANT', 'ADMIN', 'SUPER_ADMIN']);
+const ADMIN_TIER = new Set(['ADMIN', 'SUPER_ADMIN']);
 
-export function UserRow({ r, isSelf }: { r: any; isSelf: boolean }) {
+export function UserRow({ r, isSelf, assignableRoles, canManageAdmins }: { r: any; isSelf: boolean; assignableRoles: readonly string[]; canManageAdmins: boolean }) {
   const [pending, start] = useTransition();
   const [temp, setTemp] = useState('');
   const [error, setError] = useState('');
@@ -15,6 +15,10 @@ export function UserRow({ r, isSelf }: { r: any; isSelf: boolean }) {
   const [reason, setReason] = useState('');
   const [askReason, setAskReason] = useState<'role' | 'reset' | null>(null);
   const router = useRouter();
+
+  // A plain ADMIN can't manage an ADMIN/SUPER_ADMIN-tier row at all — the row is
+  // locked to read-only for them, regardless of who the row belongs to.
+  const locked = ADMIN_TIER.has(r.role) && !canManageAdmins;
 
   function pickRole(v: string) {
     setError('');
@@ -31,22 +35,37 @@ export function UserRow({ r, isSelf }: { r: any; isSelf: boolean }) {
     start(async () => { const res = await resetUserPassword(r.id, reason); if ('error' in res) setError(res.error); else if (res.id) { setTemp(res.id); setAskReason(null); setReason(''); } router.refresh(); });
   }
 
+  // The row's own current role must stay selectable even if it's outside what this
+  // admin could newly assign (e.g. a CEO row shown to a plain ADMIN), so the option
+  // list always includes the current value.
+  const roleOptions = assignableRoles.includes(r.role) ? assignableRoles : [r.role, ...assignableRoles];
+
   return (
     <Fragment>
     <tr>
       <td>{r.name}</td><td>{r.email}</td>
       <td>
-        <select className="select" style={{ margin: 0, padding: '4px 8px', width: 'auto' }} value={r.role} disabled={isSelf || pending} onChange={e => pickRole(e.target.value)}>
-          {ROLES.map(x => <option key={x} value={x}>{x.replace(/_/g, ' ')}</option>)}
-        </select>
+        {locked ? (
+          <span className="badge">{r.role.replace(/_/g, ' ')}</span>
+        ) : (
+          <select className="select" style={{ margin: 0, padding: '4px 8px', width: 'auto' }} value={r.role} disabled={isSelf || pending} onChange={e => pickRole(e.target.value)}>
+            {roleOptions.map(x => <option key={x} value={x}>{x.replace(/_/g, ' ')}</option>)}
+          </select>
+        )}
       </td>
       <td>{r.department || '—'}</td>
       <td>{r.active ? <Badge status="APPROVED" label="Active" /> : <Badge status="REJECTED" label="Inactive" />}{r.must_change_password && <span className="tag">Must change PW</span>}</td>
       <td style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-        {!isSelf && (r.active
-          ? <button className="btn light" disabled={pending} onClick={() => active(false)}>Deactivate</button>
-          : <button className="btn light" disabled={pending} onClick={() => active(true)}>Activate</button>)}
-        <button className="btn light" disabled={pending} onClick={() => setAskReason('reset')}>Reset password</button>
+        {locked ? (
+          <span className="muted small">Super Administrator only</span>
+        ) : (
+          <>
+            {!isSelf && (r.active
+              ? <button className="btn light" disabled={pending} onClick={() => active(false)}>Deactivate</button>
+              : <button className="btn light" disabled={pending} onClick={() => active(true)}>Activate</button>)}
+            <button className="btn light" disabled={pending} onClick={() => setAskReason('reset')}>Reset password</button>
+          </>
+        )}
         {error && <div className="small" style={{ color: '#9e2d2d' }}>{error}</div>}
         {temp && <div className="small">Temp password: <code>{temp}</code> (share securely, shown once)</div>}
       </td>

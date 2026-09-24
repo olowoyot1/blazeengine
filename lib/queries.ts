@@ -43,6 +43,14 @@ export async function listClients(limit = 200) {
     from clients c left join users u on u.id=c.created_by order by c.created_at desc limit ${limit}`;
 }
 
+export async function getClient(id: string) {
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
+  const rows = await sql`select c.*, u.name creator from clients c left join users u on u.id=c.created_by where c.id=${id}::uuid`;
+  if (!rows[0]) return null;
+  const sales = await sql`select id, property_name, plot_reference, amount, status from sales where client_id=${id}::uuid order by created_at desc`;
+  return { client: rows[0], sales };
+}
+
 // ---------------------------------------------------------------- Leads
 export async function listLeads(u: U) {
   const all = u.role !== 'MARKETER' && u.role !== 'SALES';
@@ -260,3 +268,59 @@ export async function listUsers() {
 export async function auditLog(limit = 200) {
   return sql`select a.*, u.name actor, u.role actor_role from audit_logs a left join users u on u.id=a.user_id order by a.created_at desc limit ${limit}`;
 }
+
+// ---------------------------------------------------------------- Departments
+export async function listDepartments(activeOnly = false) {
+  return sql`select d.*, (select count(*)::int from users u where u.department=d.name and u.active) staff_count
+    from departments d where ${activeOnly}::boolean is false or d.active order by d.name`;
+}
+
+// ---------------------------------------------------------------- Performance
+/**
+ * One row per active staff member, blending whichever metrics are relevant to
+ * their role: sales closed/value for the sales team, approval throughput for
+ * approvers, tasks completed for operations, leads captured/converted for the
+ * front line, and overall audit-log activity for everyone as a general signal.
+ */
+export async function staffPerformance() {
+  return sql`
+    select
+      u.id, u.name, u.role, u.department,
+      (select count(*)::int from sales s where s.created_by=u.id and s.status<>'CANCELLED') sales_count,
+      (select coalesce(sum(s.amount),0) from sales s where s.created_by=u.id and s.status='ALLOCATED') sales_value,
+      (select count(*)::int from sales s where s.created_by=u.id and s.status='ALLOCATED') sales_allocated,
+      (select count(*)::int from leads l where l.owner_id=u.id and l.created_at >= now() - interval '30 days') leads_30d,
+      (select count(*)::int from leads l where l.owner_id=u.id and l.status='CONVERTED' and l.updated_at >= now() - interval '30 days') leads_converted_30d,
+      (select count(*)::int from approvals a where a.acted_by=u.id and a.status in ('APPROVED','REJECTED') and a.acted_at >= now() - interval '30 days') approvals_30d,
+      (select round((avg(extract(epoch from (a.acted_at - a.created_at)))/3600)::numeric,1) from approvals a where a.acted_by=u.id and a.status in ('APPROVED','REJECTED') and a.acted_at >= now() - interval '30 days') avg_approval_hours,
+      (select count(*)::int from approvals a where a.acted_by=u.id and a.status='REJECTED' and a.acted_at >= now() - interval '30 days') rejections_30d,
+      (select count(*)::int from workflow_events w where w.actor_id=u.id and w.stage='OPERATIONS' and w.created_at >= now() - interval '30 days') ops_actions_30d,
+      (select count(*)::int from audit_logs al where al.user_id=u.id and al.created_at >= now() - interval '30 days') actions_30d
+    from users u
+    where u.active
+    order by sales_value desc, actions_30d desc, u.name`;
+}
+
+/** Company-wide performance beyond the raw pipeline counts in companyStats(): revenue,
+ *  conversion rate, average full sale-cycle time, and approval SLA compliance. */
+export async function companyPerformance() {
+  const [revenue, funnel, cycle, sla] = await Promise.all([
+    sql`select
+        (select coalesce(sum(amount),0) from sales where status='ALLOCATED') total_revenue,
+        (select coalesce(sum(amount),0) from sales where status='ALLOCATED' and allocated_at >= date_trunc('month', now())) revenue_month,
+        (select coalesce(sum(amount),0) from sales where status='ALLOCATED' and allocated_at >= now() - interval '12 months') revenue_12mo`,
+    sql`select
+        (select count(*)::int from leads) leads_total,
+        (select count(*)::int from leads where status='CONVERTED') leads_converted,
+        (select count(*)::int from sales where status<>'CANCELLED') sales_total,
+        (select count(*)::int from sales where status='ALLOCATED') sales_allocated`,
+    sql`select round(avg(extract(epoch from (allocated_at - created_at))/86400)::numeric,1) avg_cycle_days, count(*)::int n
+        from sales where status='ALLOCATED' and allocated_at is not null`,
+    sql`select
+        count(*) filter (where status in ('APPROVED','REJECTED'))::int decided,
+        count(*) filter (where status in ('APPROVED','REJECTED') and acted_at - created_at <= interval '48 hours')::int within_sla
+        from approvals where created_at >= now() - interval '90 days'`,
+  ]);
+  return { revenue: revenue[0], funnel: funnel[0], cycle: cycle[0], sla: sla[0] };
+}
+

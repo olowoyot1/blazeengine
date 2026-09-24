@@ -93,14 +93,27 @@ export async function changeOwnPassword(current: string, next: string): Promise<
   return { ok: true };
 }
 
-// ---- User & role administration (ADMIN only) -----------------------------
+// ---- User & role administration (ADMIN / SUPER_ADMIN) --------------------
 const APPROVAL_CRITICAL: Role[] = ['CEO', 'HR', 'SALES_MANAGER', 'OPERATIONS_MANAGER', 'FINANCE_OPERATIONS', 'SITE_MANAGER', 'ACCOUNTANT'];
+const ADMIN_TIER: Role[] = ['ADMIN', 'SUPER_ADMIN'];
 
 async function requireAdmin() {
   const s = await requireUser();
   if (!can(s.role, 'users.manage')) throw new ForbiddenError('Only administrators manage users');
   return s;
 }
+/**
+ * Enforces the admin hierarchy: a plain ADMIN may manage any non-admin-tier account,
+ * but creating, changing the role of, deactivating or resetting the password of an
+ * ADMIN or SUPER_ADMIN account requires SUPER_ADMIN ("admins.manage"). This is what
+ * stops one admin from quietly promoting themselves or a colleague, or from taking
+ * over another admin's account — that authority now sits only with SUPER_ADMIN.
+ */
+function requireAuthorityOver(actor: { role: Role }, targetRoleBeforeOrAfter: Role) {
+  if (ADMIN_TIER.includes(targetRoleBeforeOrAfter) && !can(actor.role, 'admins.manage'))
+    throw new ForbiddenError('Only a Super Administrator can manage admin-tier accounts');
+}
+
 export async function createUser(input: { name: string; email: string; role: string; department?: string; password: string }): Promise<Result> {
   try {
     const admin = await requireAdmin();
@@ -108,6 +121,7 @@ export async function createUser(input: { name: string; email: string; role: str
     if (!name || !email) return { error: 'Name and email are required' };
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { error: 'Email address is not valid' };
     if (!ROLES.includes(input.role as Role)) return { error: 'Invalid role' };
+    requireAuthorityOver(admin, input.role as Role);
     const problem = passwordProblem(input.password);
     if (problem) return { error: problem };
     const dup = await sql`select 1 from users where lower(email)=${email}`;
@@ -134,12 +148,15 @@ export async function setUserRole(userId: string, role: string, reason: string):
     const admin = await requireAdmin();
     if (!ROLES.includes(role as Role)) return { error: 'Invalid role' };
     if (userId === admin.id) return { error: 'You cannot change your own role' };
-    if (APPROVAL_CRITICAL.includes(role as Role) && reason.trim().length < 5) return { error: 'A reason is required when assigning an approval-critical role' };
     const target = await sql`select name, email, role from users where id=${userId}::uuid`;
     if (!target[0]) return { error: 'User not found' };
+    requireAuthorityOver(admin, target[0].role as Role);
+    requireAuthorityOver(admin, role as Role);
+    if ((APPROVAL_CRITICAL.includes(role as Role) || ADMIN_TIER.includes(role as Role)) && reason.trim().length < 5)
+      return { error: 'A reason is required when assigning this role' };
     await sql`update users set role=${role}, updated_at=now() where id=${userId}::uuid`;
     await sql`insert into audit_logs(user_id,action,entity_type,entity_id,metadata) values(${admin.id}::uuid,'USER_ROLE_CHANGED','USER',${userId}::uuid,${JSON.stringify({ from: target[0].role, to: role, reason: reason.trim() || null, by: admin.name })})`;
-    if (APPROVAL_CRITICAL.includes(role as Role)) {
+    if (APPROVAL_CRITICAL.includes(role as Role) || ADMIN_TIER.includes(role as Role)) {
       await sendMail([{ to: target[0].email, subject: '[Landblaze] Your account role changed', text: `Hello ${target[0].name},\n\nYour Landblaze role was changed from ${target[0].role} to ${role} by administrator ${admin.name}.\nReason given: ${reason.trim()}\n\nIf you did not expect this, contact another administrator immediately.` }]);
     }
     revalidatePath('/users');
@@ -150,6 +167,9 @@ export async function setUserActive(userId: string, active: boolean): Promise<Re
   try {
     const admin = await requireAdmin();
     if (userId === admin.id && !active) return { error: 'You cannot deactivate your own account' };
+    const target = await sql`select role from users where id=${userId}::uuid`;
+    if (!target[0]) return { error: 'User not found' };
+    requireAuthorityOver(admin, target[0].role as Role);
     await sql`update users set active=${active}, updated_at=now() where id=${userId}::uuid`;
     await sql`insert into audit_logs(user_id,action,entity_type,entity_id,metadata) values(${admin.id}::uuid,${active ? 'USER_ACTIVATED' : 'USER_DEACTIVATED'},'USER',${userId}::uuid,'{}')`;
     revalidatePath('/users');
@@ -162,6 +182,7 @@ export async function resetUserPassword(userId: string, reason: string): Promise
     if (reason.trim().length < 5) return { error: 'A reason is required to reset a password (kept in the audit log)' };
     const target = await sql`select name, email, role, session_version from users where id=${userId}::uuid`;
     if (!target[0]) return { error: 'User not found' };
+    requireAuthorityOver(admin, target[0].role as Role);
     const temp = Math.random().toString(36).slice(2, 6) + Math.random().toString(36).slice(2, 6) + '9Aa';
     const hash = await bcrypt.hash(temp, 12);
     const newVersion = Number(target[0].session_version ?? 0) + 1;
@@ -172,5 +193,43 @@ export async function resetUserPassword(userId: string, reason: string): Promise
     await sendMail([{ to: target[0].email, subject: '[Landblaze] Your password was reset', text: `Hello ${target[0].name},\n\nYour Landblaze password was reset by administrator ${admin.name}.\nReason given: ${reason.trim()}\n\nAny device you were already signed in on has been signed out. If you did not expect this, contact another administrator immediately.` }]);
     revalidatePath('/users');
     return { ok: true, id: temp }; // temp password returned once for the admin to relay securely
+  } catch (e) { return toErr(e); }
+}
+
+// ---- Departments (ADMIN / SUPER_ADMIN) ------------------------------------
+export async function createDepartment(name: string): Promise<Result> {
+  try {
+    const admin = await requireUser();
+    if (!can(admin.role, 'departments.manage')) throw new ForbiddenError('Only administrators manage departments');
+    const clean = name.trim();
+    if (clean.length < 2) return { error: 'Department name must be at least 2 characters' };
+    const dup = await sql`select 1 from departments where lower(name)=lower(${clean})`;
+    if (dup.length) return { error: 'A department with this name already exists' };
+    await sql`insert into departments(name, created_by) values(${clean}, ${admin.id}::uuid)`;
+    await sql`insert into audit_logs(user_id,action,entity_type,metadata) values(${admin.id}::uuid,'DEPARTMENT_CREATED','DEPARTMENT',${JSON.stringify({ name: clean })})`;
+    revalidatePath('/users');
+    return { ok: true };
+  } catch (e) { return toErr(e); }
+}
+export async function setDepartmentActive(id: string, active: boolean): Promise<Result> {
+  try {
+    const admin = await requireUser();
+    if (!can(admin.role, 'departments.manage')) throw new ForbiddenError('Only administrators manage departments');
+    await sql`update departments set active=${active} where id=${id}::uuid`;
+    await sql`insert into audit_logs(user_id,action,entity_type,entity_id,metadata) values(${admin.id}::uuid,${active ? 'DEPARTMENT_ACTIVATED' : 'DEPARTMENT_RETIRED'},'DEPARTMENT',${id}::uuid,'{}')`;
+    revalidatePath('/users');
+    return { ok: true };
+  } catch (e) { return toErr(e); }
+}
+
+// ---- Client profile --------------------------------------------------------
+export async function saveClientProfile(clientId: string, input: Record<string, unknown>): Promise<Result> {
+  const s = await requireUser();
+  try {
+    const { updateClientProfile } = await import('./workflow/clients');
+    await updateClientProfile(s, clientId, input);
+    revalidatePath(`/clients/${clientId}`);
+    revalidatePath('/leads');
+    return { ok: true };
   } catch (e) { return toErr(e); }
 }

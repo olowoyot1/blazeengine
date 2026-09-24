@@ -8,7 +8,7 @@ export function LeadRow({ r, canAct }: { r: any; canAct: boolean }) {
   const [pending, start] = useTransition();
   const router = useRouter();
   function status(v: string) { start(async () => { await actLeadStatus(r.id, v); router.refresh(); }); }
-  function convert() { start(async () => { await actConvertLead(r.id); router.refresh(); }); }
+  function convert() { start(async () => { const res = await actConvertLead(r.id); if ('id' in res && res.id) router.push(`/clients/${res.id}`); else router.refresh(); }); }
   return (
     <tr>
       <td>{r.name}</td><td>{r.phone || '—'}</td><td>{r.email || '—'}</td><td>{r.source || '—'}</td><td>{r.owner || '—'}</td>
