@@ -232,7 +232,7 @@ export async function salesReport() {
     sql`select coalesce(u.name,'—') name, count(s.id)::int sales, coalesce(sum(s.amount),0) value,
         count(*) filter (where s.status='ALLOCATED')::int allocated
         from sales s left join users u on u.id=s.created_by where s.status<>'CANCELLED' group by 1 order by value desc`,
-    sql`select to_char(date_trunc('month',created_at),'Mon YYYY') month, count(*)::int sales, coalesce(sum(amount),0) value
+    sql`select to_char(date_trunc('month',created_at),'Mon YYYY') AS month_label, count(*)::int sales, coalesce(sum(amount),0) value
         from sales where created_at >= now() - interval '12 months' and status<>'CANCELLED' group by date_trunc('month',created_at) order by date_trunc('month',created_at)`,
   ]);
   return { byExec, byMonth };
@@ -269,7 +269,7 @@ export async function siteReport() {
   const [stages, upcoming, notice, records] = await Promise.all([
     sql`select status, count(*)::int n from sales where status in ('SITE_NOTIFIED','OPS_DOCS_UPLOADED','IN_APPROVAL','RETURNED','FULLY_APPROVED','PRE_ALLOCATION','ALLOCATION_SCHEDULED','ALLOCATED') group by 1`,
     sql`select client_name, plot_reference, property_name, allocation_date from sales where status='ALLOCATION_SCHEDULED' order by allocation_date limit 50`,
-    sql`select client_name, plot_reference, status, approved_at, (approved_at::date + ${ALLOCATION_WINDOW_DAYS}) notice_due from sales
+    sql`select client_name, plot_reference, status, approved_at, (approved_at::date + make_interval(days => ${ALLOCATION_WINDOW_DAYS}::int)) AS notice_due from sales
         where status in ('FULLY_APPROVED','PRE_ALLOCATION') order by approved_at limit 50`,
     sql`select record_type, count(*)::int n from site_records where created_at >= now() - interval '30 days' group by 1 order by n desc`,
   ]);
@@ -278,7 +278,7 @@ export async function siteReport() {
 export async function financeReport() {
   const [byStatus, monthly, cycle, invoiced] = await Promise.all([
     sql`select status, count(*)::int n, coalesce(sum(coalesce(amount,negotiated_amount)),0) total from expenses group by 1 order by n desc`,
-    sql`select to_char(date_trunc('month',paid_at),'Mon YYYY') month, count(*)::int n, coalesce(sum(amount),0) total
+    sql`select to_char(date_trunc('month',paid_at),'Mon YYYY') AS month_label, count(*)::int n, coalesce(sum(amount),0) total
         from expenses where paid_at is not null group by date_trunc('month',paid_at) order by date_trunc('month',paid_at) desc limit 12`,
     sql`select round(avg(extract(epoch from (r.t - c.created_at))/86400)::numeric,1) avg_days from expenses c
         join (select entity_id, min(created_at) t from workflow_events where to_status='RECEIPT_ISSUED' group by 1) r on r.entity_id=c.id`,
