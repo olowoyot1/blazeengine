@@ -4,7 +4,6 @@ import { requireCap } from '@/lib/guard';
 import { getExpense } from '@/lib/queries';
 import { Badge } from '@/components/Badge';
 import { ApprovalDecisionPanel } from '@/components/ApprovalDecisionPanel';
-import { ApprovalDecisionPanel } from '@/components/ApprovalDecisionPanel';
 import { naira, fmtDateTime, human } from '@/lib/format';
 import { availableExpenseActions } from '@/lib/workflow/expense';
 import { EXPENSE_STATUS_LABEL } from '@/lib/constants';
