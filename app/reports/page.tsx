@@ -213,7 +213,7 @@ export default async function Reports() {
   });
 
   return (
-    <Shell s={s} title="Reports" kicker={`Scoped to your role — ${s.role.replace(/_/g, ' ')}`}>
+    <Shell s={s} title="Reports" kicker={`Scoped to your role — ${s.role.replace(/_/g, ' ')}`}><div style={{display:"flex",gap:6}}><a className="btn" href="/api/export?type=sales&format=xls">Sales Excel</a><a className="btn" href="/api/export?type=sales&format=pdf">Sales PDF</a><a className="btn" href="/api/export?type=hr&format=xls">HR Excel</a><a className="btn" href="/api/export?type=hr&format=pdf">HR PDF</a></div>
       <div className="grid2">{sections}</div>
       {myActivityCard}
     </Shell>

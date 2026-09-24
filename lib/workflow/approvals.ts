@@ -3,7 +3,7 @@ import { ForbiddenError, WorkflowError, audit, logEvent, many, notifyRoles, one,
 import type { Row } from '../db';
 
 export type Step = { step: string; role: Role; seq: number };
-type Entity = 'SALE' | 'EXPENSE';
+type Entity = 'SALE' | 'EXPENSE' | 'PAYROLL';
 
 /** Each approval round registers what happens when it completes or is rejected. */
 export type RoundHandler = {
@@ -64,7 +64,7 @@ export async function decide(actor: Actor, approvalId: string, decision: 'APPROV
     if (!h) throw new WorkflowError('This approval belongs to a retired workflow and cannot be actioned');
 
     // Serialise all decisions on the same entity so parallel approvers cannot race.
-    await one(ctx, h.entity === 'SALE' ? `select id from sales where id=$1 for update` : `select id from expenses where id=$1 for update`, [first.entity_id]);
+    await one(ctx, h.entity === 'SALE' ? `select id from sales where id=$1 for update` : h.entity === 'EXPENSE' ? `select id from expenses where id=$1 for update` : `select id from payroll_runs where id=$1 for update`, [first.entity_id]);
     const a = (await one(ctx, `select * from approvals where id=$1`, [approvalId]))!;
 
     if (a.status !== 'PENDING') throw new WorkflowError('This step has already been actioned');

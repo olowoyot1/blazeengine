@@ -9,7 +9,7 @@ export default async function Approvals() {
   const s = await requireCap('approvals.read');
   const [mine, overview] = await Promise.all([actionableApprovals(s), can(s.role, 'audit.read') ? pendingOverview() : Promise.resolve([])]);
   return (
-    <Shell s={s} title="Approval Centre" kicker="Sales Manager → Operations Manager → HR (internal audit) → CEO">
+    <Shell s={s} title="Approval Centre" kicker="Sales Manager → Operations Manager → HR (internal audit) → CEO"><div style={{display:"flex",gap:6}}><a className="btn" href="/api/export?type=approvals&format=xls">Excel</a><a className="btn" href="/api/export?type=approvals&format=pdf">PDF</a></div>
       <div className="card">
         <div className="section-title"><h3>Waiting for your decision</h3><span className="badge">{mine.length}</span></div>
         {mine.length === 0 ? <div className="empty">Nothing is waiting on you right now.</div> : (

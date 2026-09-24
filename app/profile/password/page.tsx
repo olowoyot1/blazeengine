@@ -13,7 +13,7 @@ export default function ChangePassword() {
     start(async () => {
       const r = await changeOwnPassword(cur, next);
       if ('error' in r) setError(r.error);
-      else { router.push('/dashboard'); router.refresh(); }
+      else { router.push('/profile/security'); router.refresh(); }
     });
   }
   return (

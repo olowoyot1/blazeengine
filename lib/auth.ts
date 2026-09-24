@@ -5,7 +5,7 @@ import { sql } from './db';
 import type { Role } from './constants';
 
 export const COOKIE = 'lb_session';
-export type Session = { id: string; name: string; email: string; role: Role; department: string | null; mustChangePassword: boolean };
+export type Session = { id: string; name: string; email: string; username: string | null; role: Role; department: string | null; mustChangePassword: boolean; hasPin: boolean };
 
 export function authSecret(): Uint8Array {
   const s = process.env.AUTH_SECRET;
@@ -33,11 +33,11 @@ export const session = cache(async (): Promise<Session | null> => {
     id = String(payload.sub);
     v = Number(payload.v ?? -1);
   } catch { return null; }
-  const rows = await sql`select id,name,email,role,department,active,must_change_password,session_version from users where id=${id}::uuid`;
+  const rows = await sql`select id,name,email,username,pin_hash,role,department,active,must_change_password,session_version from users where id=${id}::uuid`;
   const u = rows[0];
   if (!u || !u.active) return null;
   if (Number(u.session_version) !== v) return null; // revoked by a password change/reset since this cookie was issued
-  return { id: u.id, name: u.name, email: u.email, role: u.role, department: u.department, mustChangePassword: u.must_change_password };
+  return { id: u.id, name: u.name, email: u.email, username: u.username, role: u.role, department: u.department, mustChangePassword: u.must_change_password, hasPin: !!u.pin_hash };
 });
 
 export async function startSession(userId: string, sessionVersion: number) {

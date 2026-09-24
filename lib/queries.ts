@@ -102,6 +102,7 @@ export async function actionableApprovalForEntity(u: U, entityType: 'SALE' | 'EX
     from approvals a
     left join sales s on a.entity_type='SALE' and s.id=a.entity_id
     left join expenses e on a.entity_type='EXPENSE' and e.id=a.entity_id
+    left join payroll_runs p on a.entity_type='PAYROLL' and p.id=a.entity_id
     left join users sub on sub.id=a.submitted_by
     where a.entity_type=${entityType} and a.entity_id=${entityId}::uuid
       and a.status='PENDING' and a.approver_role=${u.role}
@@ -117,11 +118,20 @@ export async function actionableApprovalForEntity(u: U, entityType: 'SALE' | 'EX
 /** Approval steps this user can act on right now: earlier steps done, role matches, not self-submitted. */
 export async function actionableApprovals(u: U) {
   return sql`
-    select a.*, coalesce(s.client_name, e.vendor) subject, coalesce(s.plot_reference, e.category) detail,
-           coalesce(s.amount, e.amount, e.negotiated_amount) amount, sub.name submitted_by_name
+    select a.*, coalesce(s.client_name, e.vendor, 'Payroll '||p.payroll_month) subject, coalesce(s.plot_reference, e.category, p.payroll_month) detail,
+           coalesce(s.amount, e.amount, e.negotiated_amount, p.total_net) amount, sub.name submitted_by_name,
+           (select coalesce(json_agg(json_build_object('step',h.step,'status',h.status,'comment',h.comment,'acted_by',au.name,'acted_at',h.acted_at) order by h.round_no,h.seq,h.created_at),'[]'::json)
+              from approvals h left join users au on au.id=h.acted_by
+              where h.entity_type=a.entity_type and h.entity_id=a.entity_id and h.id<>a.id and h.status in ('APPROVED','REJECTED')) approval_trail,
+           (select coalesce(json_agg(json_build_object('id',d.id,'name',coalesce(d.document_name,d.document_type),'type',d.document_type,'url',d.document_url,'uploaded_by',du.name,'created_at',d.created_at) order by d.created_at),'[]'::json)
+              from sale_documents d left join users du on du.id=d.uploaded_by
+              where a.entity_type='SALE' and d.sale_id=a.entity_id) supporting_documents,
+           (select coalesce(json_agg(json_build_object('id',d.id,'name',d.document_name,'type',d.document_type,'url',('/api/files/'||d.uploaded_file_id),'uploaded_by',du.name,'created_at',d.created_at) order by d.created_at),'[]'::json)
+              from payroll_documents d left join users du on du.id=d.uploaded_by where a.entity_type='PAYROLL' and d.payroll_run_id=a.entity_id) payroll_documents
     from approvals a
     left join sales s on a.entity_type='SALE' and s.id=a.entity_id
     left join expenses e on a.entity_type='EXPENSE' and e.id=a.entity_id
+    left join payroll_runs p on a.entity_type='PAYROLL' and p.id=a.entity_id
     left join users sub on sub.id=a.submitted_by
     where a.status='PENDING' and a.approver_role=${u.role}
       and a.submitted_by is distinct from ${u.id}::uuid
@@ -132,12 +142,13 @@ export async function actionableApprovals(u: U) {
 /** Every open approval step in the company (read-only overview for oversight roles). */
 export async function pendingOverview() {
   return sql`
-    select a.*, coalesce(s.client_name, e.vendor) subject, coalesce(s.plot_reference, e.category) detail,
+    select a.*, coalesce(s.client_name, e.vendor, 'Payroll '||p.payroll_month) subject, coalesce(s.plot_reference, e.category, p.payroll_month) detail, coalesce(s.amount,e.amount,e.negotiated_amount,p.total_net) amount,
       exists (select 1 from approvals p where p.entity_type=a.entity_type and p.entity_id=a.entity_id
               and p.round=a.round and p.round_no=a.round_no and p.status='PENDING' and p.seq<a.seq) waiting
     from approvals a
     left join sales s on a.entity_type='SALE' and s.id=a.entity_id
     left join expenses e on a.entity_type='EXPENSE' and e.id=a.entity_id
+    left join payroll_runs p on a.entity_type='PAYROLL' and p.id=a.entity_id
     where a.status='PENDING' order by a.created_at limit 200`;
 }
 
@@ -349,3 +360,24 @@ export async function companyPerformance() {
   return { revenue: revenue[0], funnel: funnel[0], cycle: cycle[0], sla: sla[0] };
 }
 
+
+
+// ---------------------------------------------------------------- HR
+export async function listEmployees(){ return sql`select e.*, u.name linked_user_name from employees e left join users u on u.id=e.user_id order by e.created_at desc limit 500`; }
+export async function listLeaveRequests(){ return sql`select l.*, e.employee_no, e.first_name||' '||e.last_name employee_name, u.name approver_name from leave_requests l join employees e on e.id=l.employee_id left join users u on u.id=l.approved_by order by l.created_at desc limit 300`; }
+export async function listAttendance(){ return sql`select a.*, e.employee_no, e.first_name||' '||e.last_name employee_name from attendance a join employees e on e.id=a.employee_id where a.work_date >= current_date-30 order by a.work_date desc, employee_name`; }
+
+// ---------------------------------------------------------------- Payroll
+export async function payrollRuns(){ return sql`select p.*,u.name creator,au.name approver,du.name disburser,
+  (select count(*)::int from payroll_items i where i.payroll_run_id=p.id) item_count
+  from payroll_runs p left join users u on u.id=p.created_by left join users au on au.id=p.approved_by left join users du on du.id=p.disbursed_by order by p.period_start desc,p.created_at desc limit 100`; }
+export async function payrollItems(runId:string){ return sql`select i.*,e.employee_no,e.first_name||' '||e.last_name employee_name,e.department,e.job_title,e.bank_name,e.bank_account
+  from payroll_items i join employees e on e.id=i.employee_id where i.payroll_run_id=${runId}::uuid order by employee_name`; }
+export async function payrollApprovalTrail(runId:string){ return sql`select a.*,u.name acted_by_name,su.name submitted_by_name from approvals a left join users u on u.id=a.acted_by left join users su on su.id=a.submitted_by where a.entity_type='PAYROLL' and a.entity_id=${runId}::uuid order by a.seq,a.created_at`; }
+
+// ---------------------------------------------------------------- Staff chat
+export async function chatRooms(userId:string){ return sql`select r.*, case when r.room_type='GENERAL' then r.name else coalesce(case when r.user_a=${userId}::uuid then ub.name else ua.name end,'Direct chat') end display_name
+  from chat_rooms r left join users ua on ua.id=r.user_a left join users ub on ub.id=r.user_b
+  where r.room_type='GENERAL' or r.user_a=${userId}::uuid or r.user_b=${userId}::uuid order by r.room_type desc,r.created_at`; }
+export async function chatMessages(roomId:string,userId:string){ return sql`select m.*,u.name sender_name from chat_messages m join users u on u.id=m.sender_id where m.room_id=${roomId}::uuid and exists(select 1 from chat_rooms r where r.id=m.room_id and (r.room_type='GENERAL' or r.user_a=${userId}::uuid or r.user_b=${userId}::uuid)) and m.deleted_at is null order by m.created_at desc limit 200`; }
+export async function chatUsers(userId:string){ return sql`select id,name,role,department from users where active and id<>${userId}::uuid order by name`; }

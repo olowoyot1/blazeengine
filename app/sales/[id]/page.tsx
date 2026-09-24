@@ -4,7 +4,7 @@ import { requireCap } from '@/lib/guard';
 import { getSale } from '@/lib/queries';
 import { Badge } from '@/components/Badge';
 import { ApprovalDecisionPanel } from '@/components/ApprovalDecisionPanel';
-import { ApprovalDecisionPanel } from '@/components/ApprovalDecisionPanel';
+import SupportingDocuments from './SupportingDocuments';
 import { naira, fmtDateTime, human } from '@/lib/format';
 import { availableSaleActions } from '@/lib/workflow/sale';
 import { SALE_STATUS_ORDER, SALE_STATUS_LABEL } from '@/lib/constants';
@@ -64,6 +64,7 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
                 <a href={d.document_url} target="_blank" rel="noreferrer">{d.document_url}</a></li>
             ))}</ul>
           )}
+          <SupportingDocuments saleId={sale.id} />
           <h3 style={{ marginTop: 18 }}>Operations tasks</h3>
           {tasks.length === 0 ? <div className="muted small">None.</div> : (
             <ul className="timeline">{tasks.map((t: any) => (
