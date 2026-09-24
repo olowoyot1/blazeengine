@@ -5,7 +5,7 @@ type PEntity = 'PAYROLL';
 const CEO_STEP = [{ step: 'CEO Payroll Approval', role: 'CEO' as const, seq: 1 }];
 
 registerRound('PAYROLL_CEO_APPROVAL', {
-  entity: 'PAYROLL' as any,
+  entity: 'PAYROLL',
   onComplete: async (ctx, approval) => {
     await ctx.tx.query(`update payroll_runs set status='APPROVED', approved_by=$2, approved_at=now(), updated_at=now() where id=$1`, [approval.entity_id, approval.acted_by]);
   },
@@ -17,7 +17,7 @@ registerRound('PAYROLL_CEO_APPROVAL', {
     const r = await one(ctx, `select payroll_month,total_net from payroll_runs where id=$1`, [entityId]);
     return `Payroll ${r?.payroll_month ?? ''} — net ${Number(r?.total_net ?? 0).toLocaleString()}`;
   },
-} as any);
+});
 
 export async function submitPayroll(actor: Actor, payrollId: string) {
   if (!['HR','ADMIN','SUPER_ADMIN'].includes(actor.role)) throw new ForbiddenError('Only HR or an administrator can submit payroll');
@@ -29,7 +29,7 @@ export async function submitPayroll(actor: Actor, payrollId: string) {
     if (!items || items.n < 1) throw new WorkflowError('Payroll must contain at least one employee');
     await ctx.tx.query(`update payroll_runs set status='PENDING_CEO_APPROVAL',updated_at=now() where id=$1`, [payrollId]);
     await ctx.tx.query(`delete from approvals where entity_type='PAYROLL' and entity_id=$1 and status in ('PENDING','CANCELLED')`, [payrollId]);
-    await openRound(ctx, 'PAYROLL' as any, payrollId, 'PAYROLL_CEO_APPROVAL', 1, CEO_STEP);
+    await openRound(ctx, 'PAYROLL', payrollId, 'PAYROLL_CEO_APPROVAL', 1, CEO_STEP);
     await audit(ctx, 'PAYROLL_SUBMITTED', 'PAYROLL', payrollId, { total_net: p.total_net });
     return { ok: true };
   });
