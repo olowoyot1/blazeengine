@@ -136,12 +136,12 @@ export const EXPENSE_ACTIONS: ExpenseAction[] = [
 
 export const getExpenseAction = (k: string) => EXPENSE_ACTIONS.find(a => a.key === k);
 export const availableExpenseActions = (e: { status: string }, user: { role: Role }) =>
-  EXPENSE_ACTIONS.filter(a => a.roles.includes(user.role) && a.from.includes(e.status));
+  EXPENSE_ACTIONS.filter(a => (user.role === 'SUPER_ADMIN' || a.roles.includes(user.role)) && a.from.includes(e.status));
 
 export async function performExpenseAction(actor: Actor, id: string, key: string, input: Record<string, unknown>) {
   const a = getExpenseAction(key);
   if (!a) throw new WorkflowError('Unknown action');
-  if (!a.roles.includes(actor.role)) throw new ForbiddenError('Your role is not permitted to do this');
+  if (actor.role !== 'SUPER_ADMIN' && !a.roles.includes(actor.role)) throw new ForbiddenError('Your role is not permitted to do this');
   return run(actor, async ctx => {
     const e = await one(ctx, `select * from expenses where id=$1 for update`, [id]);
     if (!e) throw new WorkflowError('Expense not found');
@@ -157,7 +157,7 @@ export async function performExpenseAction(actor: Actor, id: string, key: string
 
 /** Site Manager uploads negotiation details with a vendor. */
 export async function createNegotiation(actor: Actor, input: Record<string, unknown>) {
-  if (actor.role !== 'SITE_MANAGER') throw new ForbiddenError('Only the Site Manager uploads vendor negotiations');
+  if (actor.role !== 'SUPER_ADMIN' && actor.role !== 'SITE_MANAGER') throw new ForbiddenError('Only the Site Manager uploads vendor negotiations');
   const p = parseFields([
     { name: 'sale_id', label: 'Related sale', type: 'text' },
     { name: 'category', label: 'Category', type: 'text', required: true },
@@ -185,7 +185,7 @@ export async function createNegotiation(actor: Actor, input: Record<string, unkn
 
 /** Accountant enters a direct (non-negotiated) expense, e.g. office/marketing costs. Same approval path. */
 export async function createDirectExpense(actor: Actor, input: Record<string, unknown>) {
-  if (actor.role !== 'ACCOUNTANT') throw new ForbiddenError('Only Accounts can enter direct expenses');
+  if (actor.role !== 'SUPER_ADMIN' && actor.role !== 'ACCOUNTANT') throw new ForbiddenError('Only Accounts can enter direct expenses');
   const p = parseFields([
     { name: 'sale_id', label: 'Related sale', type: 'text' },
     { name: 'category', label: 'Category', type: 'text', required: true },

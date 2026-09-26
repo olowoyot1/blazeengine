@@ -43,7 +43,7 @@ export function UserRow({ r, isSelf, assignableRoles, canManageAdmins }: { r: an
   return (
     <Fragment>
     <tr>
-      <td>{r.name}</td><td>{r.email}</td>
+      <td><div className="staff-cell">{r.avatar_file_id?<img className="staff-avatar" src={'/api/files/'+r.avatar_file_id} alt=""/>:<span className="staff-avatar placeholder">{r.name.slice(0,1).toUpperCase()}</span>}<span>{r.name}</span></div></td><td>{r.email}</td>
       <td>
         {locked ? (
           <span className="badge">{r.role.replace(/_/g, ' ')}</span>

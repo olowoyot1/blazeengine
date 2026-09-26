@@ -268,6 +268,7 @@ ALTER TABLE clients ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEF
 -- v3.3: approval evidence, first-login username/PIN, and HR module
 ALTER TABLE users ADD COLUMN IF NOT EXISTS username text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS pin_hash text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_file_id uuid REFERENCES uploaded_files(id) ON DELETE SET NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_users_username_lower ON users(lower(username)) WHERE username IS NOT NULL;
 
 ALTER TABLE sale_documents ADD COLUMN IF NOT EXISTS uploaded_file_id uuid REFERENCES uploaded_files(id) ON DELETE SET NULL;

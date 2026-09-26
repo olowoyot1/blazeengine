@@ -83,9 +83,32 @@ export async function setupLoginIdentity(username: string, pin: string): Promise
   const dup = await sql`select id from users where lower(username)=${u} and id<>${s.id}::uuid`;
   if (dup.length) return { error: 'That username is already in use.' };
   const hash = await bcrypt.hash(pin, 12);
-  await sql`update users set username=${u}, pin_hash=${hash}, updated_at=now() where id=${s.id}::uuid`;
+  // Completing onboarding switches the account from the one-time email/password
+  // bootstrap flow to the normal username + PIN flow.
+  await sql`update users set username=${u}, pin_hash=${hash}, must_change_password=false, updated_at=now() where id=${s.id}::uuid`;
   await sql`insert into audit_logs(user_id,action,entity_type,entity_id,metadata) values(${s.id}::uuid,'LOGIN_IDENTITY_SET','USER',${s.id}::uuid,${JSON.stringify({ username: u })})`;
   return { ok: true };
+}
+
+
+export async function updateOwnProfile(input: { name: string; email: string; avatarFileId?: string | null }): Promise<Result> {
+  try {
+    const s = await requireUser({ allowPasswordChange: true });
+    const name = input.name.trim(); const email = input.email.trim().toLowerCase();
+    if (name.length < 2) return { error: 'Name is required' };
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { error: 'Email address is not valid' };
+    const dup = await sql`select 1 from users where lower(email)=${email} and id<>${s.id}::uuid`;
+    if (dup.length) return { error: 'That email is already in use' };
+    if (input.avatarFileId && !/^[0-9a-f-]{36}$/i.test(input.avatarFileId)) return { error: 'Invalid profile picture' };
+    if (input.avatarFileId) {
+      const owned = await sql`select id from uploaded_files where id=${input.avatarFileId}::uuid and uploaded_by=${s.id}::uuid and mime_type in ('image/png','image/jpeg')`;
+      if (!owned.length) return { error: 'That profile picture is not available to this user' };
+    }
+    await sql`update users set name=${name}, email=${email}, avatar_file_id=${input.avatarFileId || null} where id=${s.id}::uuid`;
+    await sql`insert into audit_logs(user_id,action,entity_type,entity_id,metadata) values(${s.id}::uuid,'PROFILE_UPDATED','USER',${s.id}::uuid,${JSON.stringify({ email_changed: email !== s.email, avatar_changed: input.avatarFileId !== undefined })})`;
+    revalidatePath('/profile'); revalidatePath('/dashboard'); revalidatePath('/users');
+    return { ok: true };
+  } catch (e) { return toErr(e); }
 }
 
 // ---- Password self-service ----------------------------------------------
@@ -143,7 +166,7 @@ export async function createUser(input: { name: string; email: string; role: str
     if (dup.length) return { error: 'A user with this email already exists' };
     const hash = await bcrypt.hash(input.password, 12);
     const row = await sql`insert into users(name,email,password_hash,role,department,must_change_password)
-      values(${name},${email},${hash},${input.role},${input.department || null},true) returning id`;
+      values(${name},${email},${hash},${input.role},${input.department || null},false) returning id`;
     await sql`insert into audit_logs(user_id,action,entity_type,entity_id,metadata) values(${admin.id}::uuid,'USER_CREATED','USER',${row[0].id}::uuid,${JSON.stringify({ role: input.role })})`;
     revalidatePath('/users');
     return { ok: true, id: row[0].id };
@@ -203,7 +226,7 @@ export async function resetUserPassword(userId: string, reason: string): Promise
     const newVersion = Number(target[0].session_version ?? 0) + 1;
     // Bumping session_version here kills any session the target already has open —
     // including one an attacker may be holding — the instant the reset happens.
-    await sql`update users set password_hash=${hash}, must_change_password=true, failed_attempts=0, locked_until=null, session_version=${newVersion}, updated_at=now() where id=${userId}::uuid`;
+    await sql`update users set password_hash=${hash}, username=null, pin_hash=null, must_change_password=false, failed_attempts=0, locked_until=null, session_version=${newVersion}, updated_at=now() where id=${userId}::uuid`;
     await sql`insert into audit_logs(user_id,action,entity_type,entity_id,metadata) values(${admin.id}::uuid,'PASSWORD_RESET','USER',${userId}::uuid,${JSON.stringify({ reason: reason.trim(), by: admin.name })})`;
     await sendMail([{ to: target[0].email, subject: '[Landblaze] Your password was reset', text: `Hello ${target[0].name},\n\nYour Landblaze password was reset by administrator ${admin.name}.\nReason given: ${reason.trim()}\n\nAny device you were already signed in on has been signed out. If you did not expect this, contact another administrator immediately.` }]);
     revalidatePath('/users');
@@ -265,7 +288,7 @@ export async function recordAttendance(input:{employeeId:string;workDate:string;
 // ---- Payroll -------------------------------------------------------------
 export async function createPayrollRun(input: { payrollMonth: string; periodStart: string; periodEnd: string; notes?: string }): Promise<Result> {
   const s = await requireCap('hr.payroll');
-  if (!['HR','ADMIN','SUPER_ADMIN'].includes(s.role)) return { error: 'Only HR or an administrator can create payroll.' };
+  if (s.role !== 'SUPER_ADMIN' && !['HR','ADMIN'].includes(s.role)) return { error: 'Only HR or an administrator can create payroll.' };
   try {
     const existing = await sql`select id from payroll_runs where payroll_month=${input.payrollMonth.trim()}`;
     if (existing.length) return { error: 'A payroll run already exists for this month.' };
@@ -299,6 +322,6 @@ export async function openDirectChat(userId:string):Promise<Result>{
   try { const existing=await sql`select id from chat_rooms where room_type='DIRECT' and ((user_a=${s.id}::uuid and user_b=${userId}::uuid) or (user_a=${userId}::uuid and user_b=${s.id}::uuid)) limit 1`; if(existing.length)return {ok:true,id:existing[0].id}; const rows=await sql`insert into chat_rooms(room_type,user_a,user_b,created_by) values('DIRECT',${s.id}::uuid,${userId}::uuid,${s.id}::uuid) returning id`; revalidatePath('/chat'); return {ok:true,id:rows[0].id}; }catch(e){return toErr(e);}
 }
 export async function updatePayrollItem(id:string, allowances:number, deductions:number):Promise<Result>{
-  const s=await requireCap('hr.payroll'); if(!['HR','ADMIN','SUPER_ADMIN'].includes(s.role))return {error:'Only HR can edit payroll.'};
+  const s=await requireCap('hr.payroll'); if(s.role!=='SUPER_ADMIN' && !['HR','ADMIN'].includes(s.role))return {error:'Only HR can edit payroll.'};
   try{await sql`update payroll_items i set allowances=${Number(allowances)||0},deductions=${Number(deductions)||0},gross_salary=base_salary+((${Number(allowances)||0})::numeric),net_salary=base_salary+((${Number(allowances)||0})::numeric)-((${Number(deductions)||0})::numeric) from payroll_runs p where i.id=${id}::uuid and p.id=i.payroll_run_id and p.status in ('DRAFT','REJECTED')`;const r=await sql`select payroll_run_id from payroll_items where id=${id}::uuid`;if(r[0])await sql`update payroll_runs p set total_gross=x.gross,total_allowances=x.allowances,total_deductions=x.deductions,total_net=x.net,updated_at=now() from (select payroll_run_id,sum(gross_salary) gross,sum(allowances) allowances,sum(deductions) deductions,sum(net_salary) net from payroll_items where payroll_run_id=${r[0].payroll_run_id} group by payroll_run_id)x where p.id=x.payroll_run_id`;revalidatePath('/hr/payroll');return {ok:true};}catch(e){return toErr(e);}
 }

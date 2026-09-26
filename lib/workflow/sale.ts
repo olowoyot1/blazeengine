@@ -328,14 +328,14 @@ export const getSaleAction = (k: string) => BY_KEY.get(k);
 /** Actions this user may perform right now on this sale (drives the UI and the queue). */
 export function availableSaleActions(sale: { status: string; created_by?: string | null }, user: { id: string; role: Role }) {
   return SALE_ACTIONS.filter(a =>
-    a.roles.includes(user.role) && a.from.includes(sale.status) &&
+    (user.role === 'SUPER_ADMIN' || a.roles.includes(user.role)) && a.from.includes(sale.status) &&
     !(a.ownOnly && user.role === 'SALES' && sale.created_by !== user.id));
 }
 
 export async function performSaleAction(actor: Actor, saleId: string, key: string, input: Record<string, unknown>) {
   const a = BY_KEY.get(key);
   if (!a) throw new WorkflowError('Unknown action');
-  if (!a.roles.includes(actor.role)) throw new ForbiddenError('Your role is not permitted to do this');
+  if (actor.role !== 'SUPER_ADMIN' && !a.roles.includes(actor.role)) throw new ForbiddenError('Your role is not permitted to do this');
   return run(actor, async ctx => {
     const s = await one(ctx, `select * from sales where id=$1 for update`, [saleId]);
     if (!s) throw new WorkflowError('Sale not found');
@@ -353,7 +353,7 @@ export async function performSaleAction(actor: Actor, saleId: string, key: strin
 const stageOf = (a: SaleAction) => a.roles.includes('SITE_MANAGER') ? 'SITE_MANAGEMENT' : a.roles.includes('ACCOUNTANT') ? 'ACCOUNTS' : a.roles.includes('OPERATIONS') ? 'OPERATIONS' : 'SALES';
 
 export async function createSale(actor: Actor, input: Record<string, unknown>) {
-  if (!['SALES', 'SALES_MANAGER'].includes(actor.role)) throw new ForbiddenError('Only the sales team can create sales');
+  if (actor.role !== 'SUPER_ADMIN' && !['SALES', 'SALES_MANAGER'].includes(actor.role)) throw new ForbiddenError('Only the sales team can create sales');
   const p = parseFields([
     { name: 'client_id', label: 'Client', type: 'text', required: true },
     { name: 'property_name', label: 'Estate / property', type: 'text', required: true },

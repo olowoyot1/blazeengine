@@ -28,7 +28,7 @@ export default async function Leads() {
       <div className="card" style={{ marginTop: 15 }}>
         <div className="table-wrap"><table className="table">
           <thead><tr><th>Lead</th><th>Phone</th><th>Email</th><th>Source</th><th>Owner</th><th>Status</th><th>Created</th><th></th></tr></thead>
-          <tbody>{leads.map((r: any) => <LeadRow key={r.id} r={r} canAct={s.id === r.owner_id || s.role === 'SALES_MANAGER'} />)}</tbody>
+          <tbody>{leads.map((r: any) => <LeadRow key={r.id} r={r} canAct={s.role === 'SUPER_ADMIN' || s.id === r.owner_id || s.role === 'SALES_MANAGER'} />)}</tbody>
         </table></div>
         {leads.length === 0 && <div className="empty">No leads yet.</div>}
       </div>

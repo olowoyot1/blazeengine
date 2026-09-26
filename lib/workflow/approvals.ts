@@ -68,7 +68,7 @@ export async function decide(actor: Actor, approvalId: string, decision: 'APPROV
     const a = (await one(ctx, `select * from approvals where id=$1`, [approvalId]))!;
 
     if (a.status !== 'PENDING') throw new WorkflowError('This step has already been actioned');
-    if (a.approver_role !== actor.role) throw new ForbiddenError(`Only ${a.approver_role.replace(/_/g, ' ')} can action this step`);
+    if (actor.role !== 'SUPER_ADMIN' && a.approver_role !== actor.role) throw new ForbiddenError(`Only ${a.approver_role.replace(/_/g, ' ')} can action this step`);
     if (a.submitted_by && a.submitted_by === actor.id) throw new ForbiddenError('You cannot approve an item you submitted (separation of duties)');
     if (h.conflict) {
       const problem = await h.conflict(ctx, a, actor);

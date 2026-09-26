@@ -105,7 +105,7 @@ export async function actionableApprovalForEntity(u: U, entityType: 'SALE' | 'EX
     left join payroll_runs p on a.entity_type='PAYROLL' and p.id=a.entity_id
     left join users sub on sub.id=a.submitted_by
     where a.entity_type=${entityType} and a.entity_id=${entityId}::uuid
-      and a.status='PENDING' and a.approver_role=${u.role}
+      and a.status='PENDING' and (${u.role}='SUPER_ADMIN' or a.approver_role=${u.role})
       and a.submitted_by is distinct from ${u.id}::uuid
       and not exists (
         select 1 from approvals p where p.entity_type=a.entity_type and p.entity_id=a.entity_id
@@ -133,7 +133,7 @@ export async function actionableApprovals(u: U) {
     left join expenses e on a.entity_type='EXPENSE' and e.id=a.entity_id
     left join payroll_runs p on a.entity_type='PAYROLL' and p.id=a.entity_id
     left join users sub on sub.id=a.submitted_by
-    where a.status='PENDING' and a.approver_role=${u.role}
+    where a.status='PENDING' and (${u.role}='SUPER_ADMIN' or a.approver_role=${u.role})
       and a.submitted_by is distinct from ${u.id}::uuid
       and not exists (select 1 from approvals p where p.entity_type=a.entity_type and p.entity_id=a.entity_id
                       and p.round=a.round and p.round_no=a.round_no and p.status='PENDING' and p.seq<a.seq)
@@ -299,7 +299,7 @@ export async function notificationsFor(userId: string) {
   return sql`select * from notifications where user_id=${userId}::uuid order by created_at desc limit 100`;
 }
 export async function listUsers() {
-  return sql`select id,name,email,role,department,active,must_change_password,locked_until,created_at from users order by active desc, name`;
+  return sql`select id,name,email,role,department,active,must_change_password,locked_until,created_at,avatar_file_id from users order by active desc, name`;
 }
 export async function auditLog(limit = 200) {
   return sql`select a.*, u.name actor, u.role actor_role from audit_logs a left join users u on u.id=a.user_id order by a.created_at desc limit ${limit}`;

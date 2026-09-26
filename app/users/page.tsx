@@ -23,7 +23,7 @@ export default async function Users() {
       )}
       <div className="card">
         <h3>Add a user</h3>
-        <p className="muted small">New users must change their password on first sign-in.</p>
+        <p className="muted small">The issued email/password is used once for onboarding. The user then creates a unique username and 6-digit PIN for normal sign-in.</p>
         <NewUserForm assignableRoles={assignableRoles} departments={departments.filter((d: any) => d.active).map((d: any) => d.name)} />
       </div>
       <div className="card" style={{ marginTop: 15 }}>

@@ -13,7 +13,7 @@ export default async function Expenses() {
   const rows = await listExpenses(s);
   return (
     <Shell s={s} title="Expenses & Payments" kicker="Vendor negotiation → expense → bank payment → receipt"><div style={{display:"flex",gap:6}}><a className="btn" href="/api/export?type=expenses&format=xls">Excel</a><a className="btn" href="/api/export?type=expenses&format=pdf">PDF</a></div>
-      {s.role === 'ACCOUNTANT' && (
+      {(s.role === 'ACCOUNTANT' || s.role === 'SUPER_ADMIN') && (
         <div className="card" id="new"><h3>Enter a direct expense</h3><p className="muted small">For costs not tied to a Site Manager negotiation (e.g. office supplies). Goes through the same Ops Manager/HR/CEO approval.</p><NewDirectExpenseForm /></div>
       )}
       <div className="card" style={{ marginTop: 15 }}>
