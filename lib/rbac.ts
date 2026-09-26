@@ -28,8 +28,7 @@ export type NavGroup={label:string;items:NavItem[]};
 export const NAV_GROUPS:NavGroup[]=[
  {label:'General',items:[{href:'/dashboard',label:'Dashboard',cap:[],mode:'view'},{href:'/approvals',label:'Approvals',cap:['approvals.read'],mode:'both'},{href:'/reports',label:'Company Reports',cap:ALL_REPORTS,mode:'view'},{href:'/chat',label:'Staff Chat',cap:['chat.read'],mode:'both'},{href:'/notifications',label:'Notifications',cap:[],mode:'view'}]},
  {label:'Sales & Marketing',items:[{href:'/leads',label:'Leads & Clients',cap:['lead.read','lead.read_all'],mode:'both'},{href:'/sales',label:'Sales',cap:['sale.read','sale.read_all'],mode:'both'}]},
- {label:'Accounts',items:[{href:'/accounts',label:'Accounts',cap:['accounts.workspace'],mode:'both'}]},
- {label:'Finance Operations',items:[{href:'/expenses',label:'Expenses & Payments',cap:['expense.read','expense.read_all','finance.workspace'],mode:'both'}]},
+ {label:'Accounts & Finance Operations',items:[{href:'/accounts',label:'Accounts',cap:['accounts.workspace'],mode:'both'},{href:'/expenses',label:'Expenses & Payments',cap:['expense.read','expense.read_all','finance.workspace'],mode:'both'}]},
  {label:'Operations',items:[{href:'/operations',label:'Operations',cap:['ops.workspace'],mode:'both'}]},
  {label:'Site Management',items:[{href:'/site-management',label:'Site Management',cap:['site.workspace'],mode:'both'}]},
  {label:'Human Resources',items:[{href:'/hr',label:'HR & Employees',cap:['hr.workspace','report.hr','payroll.read'],mode:'both'},{href:'/hr/payroll',label:'Payroll',cap:['payroll.read','hr.payroll'],mode:'both'}]},

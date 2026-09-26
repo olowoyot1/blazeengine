@@ -235,8 +235,8 @@ CREATE INDEX IF NOT EXISTS idx_clients_lead ON clients(lead_id);
 
 -- Default departments (admin can add/retire more from Users & Roles).
 INSERT INTO departments(name) VALUES
-  ('Management'), ('Human Resources'), ('Sales & Marketing'), ('Accounts'),
-  ('Finance Operations'), ('Operations'), ('Site Management')
+  ('Management'), ('Human Resources'), ('Sales & Marketing'), ('Accounts & Finance Operations'),
+  ('Operations'), ('Site Management')
 ON CONFLICT (name) DO NOTHING;
 
 -- v3.1 hardening additions: safe to run again on a database that already has v3.0's
