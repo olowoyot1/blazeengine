@@ -41,7 +41,7 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
 
       <div className="grid2">
         <div className="card">
-          <div className="section-title"><h3>Overview</h3><Badge status={sale.status} label={SALE_STATUS_LABEL[sale.status] ?? sale.status} /></div>
+          <div className="section-title"><h3>Overview</h3><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span className="badge">{sale.sale_reference || 'Reference pending'}</span><Badge status={sale.status} label={SALE_STATUS_LABEL[sale.status] ?? sale.status} /></div></div>
           <table className="table"><tbody>
             <tr><td className="muted">Client</td><td>{sale.client_name} {sale.client_email ? `(${sale.client_email})` : ''}</td></tr>
             <tr><td className="muted">Property / Plot</td><td>{sale.property_name || '—'} / {sale.plot_reference || '—'}</td></tr>

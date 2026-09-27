@@ -48,7 +48,7 @@ export async function getClient(id: string) {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
   const rows = await sql`select c.*, u.name creator from clients c left join users u on u.id=c.created_by where c.id=${id}::uuid`;
   if (!rows[0]) return null;
-  const sales = await sql`select id, property_name, plot_reference, amount, status from sales where client_id=${id}::uuid order by created_at desc`;
+  const sales = await sql`select id, sale_reference, property_name, plot_reference, amount, status from sales where client_id=${id}::uuid order by created_at desc`;
   return { client: rows[0], sales };
 }
 

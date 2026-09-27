@@ -76,8 +76,11 @@ CREATE TABLE IF NOT EXISTS leads(
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE SEQUENCE IF NOT EXISTS sale_reference_seq;
+
 CREATE TABLE IF NOT EXISTS sales(
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  sale_reference text,
   client_id uuid REFERENCES clients(id),
   lead_id uuid REFERENCES leads(id),
   client_name text NOT NULL,
@@ -109,6 +112,10 @@ CREATE TABLE IF NOT EXISTS sales(
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS sale_reference text;
+UPDATE sales SET sale_reference = 'SALE-' || to_char(created_at, 'YYYYMM') || '-' || upper(substr(replace(id::text, '-', ''), 1, 8)) WHERE sale_reference IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS sales_sale_reference_unique ON sales(sale_reference);
 
 CREATE TABLE IF NOT EXISTS sale_documents(
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

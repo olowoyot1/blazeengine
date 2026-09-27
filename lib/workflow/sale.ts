@@ -452,8 +452,8 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
     }
     const paymentStatus = p.payment_proof_url ? 'PROOF_SUBMITTED' : 'UNPAID';
     const s = (await one(ctx,
-`insert into sales(client_id,lead_id,client_name,client_email,property_name,plot_reference,amount,estate_value,payment_amount,quoted_amount,payment_plan,description,status,payment_status,payment_reference,created_by)
-  values($1,(select id from leads where client_id=$1 limit 1),$2,$3,$4,$5,$6,$7,$8,$7,$9,$10,'DRAFT',$11,$12,$13) returning id`,
+`insert into sales(sale_reference,client_id,lead_id,client_name,client_email,property_name,plot_reference,amount,estate_value,payment_amount,quoted_amount,payment_plan,description,status,payment_status,payment_reference,created_by)
+  values('SALE-' || to_char(now(), 'YYYYMM') || '-' || lpad(nextval('sale_reference_seq')::text, 6, '0'), $1,(select id from leads where client_id=$1 limit 1),$2,$3,$4,$5,$6,$7,$8,$7,$9,$10,'DRAFT',$11,$12,$13) returning id, sale_reference`,
   [client.id, client.name, client.email, p.property_name, p.plot_reference, p.estate_value, p.estate_value, p.payment_amount, p.payment_plan, p.description, paymentStatus, p.payment_reference ?? null, actor.id]))!;
     if (p.payment_proof_url) {
       const m = String(p.payment_proof_url).match(/^\/api\/files\/([0-9a-f-]{36})$/i)!;

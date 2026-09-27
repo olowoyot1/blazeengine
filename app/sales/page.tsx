@@ -23,10 +23,10 @@ export default async function Sales({ searchParams }: { searchParams: Promise<{ 
       )}
       <div className="card" style={{ marginTop: 15 }}>
         <div className="table-wrap"><table className="table">
-          <thead><tr><th>Client</th><th>Property</th><th>Plot</th><th>Amount</th><th>Status</th><th>Payment</th><th>Allocation</th><th></th></tr></thead>
+          <thead><tr><th>Reference</th><th>Client</th><th>Property</th><th>Plot</th><th>Amount</th><th>Status</th><th>Payment</th><th>Allocation</th><th></th></tr></thead>
           <tbody>{rows.map((r: any) => (
             <tr key={r.id}>
-              <td>{r.client_name}</td><td>{r.property_name || '—'}</td><td>{r.plot_reference || '—'}</td>
+              <td><b>{r.sale_reference || 'Reference pending'}</b></td><td>{r.client_name}</td><td>{r.property_name || '—'}</td><td>{r.plot_reference || '—'}</td>
               <td>{naira(r.amount)}</td><td><Badge status={r.status} /></td>
               <td><Badge status={r.payment_status} label={r.payment_status.replace(/_/g, ' ')} /></td>
               <td>{r.allocation_date || 'Not scheduled'}</td>
