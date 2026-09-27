@@ -39,7 +39,7 @@ export default async function Leads() {
           <tbody>{clients.map((c: any) => (
             <tr key={c.id}><td>{c.name}</td><td>{c.phone || '—'}</td><td>{c.email || '—'}</td><td>{c.sales_count}</td>
               <td>{c.profile_completed_at ? <span className="badge green">Complete</span> : <span className="badge yellow">Incomplete</span>}</td>
-              <td><Link className="btn light" href={`/clients/${c.id}`}>Open</Link></td></tr>
+              <td><div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}><Link className="btn light" href={`/clients/${c.id}`}>Open</Link><Link className="btn" href={`/sales?client_id=${encodeURIComponent(c.id)}#new`}>Fresh sale</Link></div></td></tr>
           ))}</tbody>
         </table></div>
       </div>

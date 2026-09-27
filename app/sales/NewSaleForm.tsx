@@ -3,8 +3,12 @@ import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { newSale } from '@/lib/actions';
 
-export function NewSaleForm({ clients }: { clients: { id: string; name: string; phone?: string }[] }) {
-  const [values, setValues] = useState<Record<string, string>>({});
+export function NewSaleForm({ clients, initialClientId }: { clients: { id: string; name: string; phone?: string }[]; initialClientId?: string }) {
+  const [values, setValues] = useState<Record<string, string>>(() => {
+    const initial: Record<string, string> = {};
+    if (initialClientId) initial.client_id = initialClientId;
+    return initial;
+  });
   const [paymentProofName, setPaymentProofName] = useState('');
   const [uploadingProof, setUploadingProof] = useState(false);
   const [error, setError] = useState(''); const [pending, start] = useTransition();

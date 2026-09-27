@@ -9,15 +9,16 @@ import { naira } from '@/lib/format';
 import { NewSaleForm } from './NewSaleForm';
 import { can } from '@/lib/rbac';
 
-export default async function Sales() {
+export default async function Sales({ searchParams }: { searchParams: Promise<{ client_id?: string }> }) {
   const s = await requireCap('sale.read', 'sale.read_all');
+  const { client_id: initialClientId } = await searchParams;
   const [rows, clients] = await Promise.all([listSales(s), can(s.role, 'sale.create') ? listClients(200) : Promise.resolve([])]);
   return (
     <Shell s={s} title="Sales" kicker="Invoice → payment proof → approval chain → allocation"><div style={{display:"flex",gap:6}}><a className="btn" href="/api/export?type=sales&format=xls">Excel</a><a className="btn" href="/api/export?type=sales&format=pdf">PDF</a></div>
       {can(s.role, 'sale.create') && (
         <div className="card" id="new">
           <h3>Create sale</h3>
-          {(clients as any[]).length === 0 ? <p className="muted">Convert a lead into a client first, from the Leads page.</p> : <NewSaleForm clients={clients as any} />}
+          {(clients as any[]).length === 0 ? <p className="muted">Convert a lead into a client first, from the Leads page.</p> : <NewSaleForm clients={clients as any} initialClientId={initialClientId} />}
         </div>
       )}
       <div className="card" style={{ marginTop: 15 }}>
