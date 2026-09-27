@@ -1,3 +1,7 @@
+export const dynamic = 'force-dynamic';
+
+import Shell from '@/components/Shell';
+// ... rest of your existing app/dashboard/page.tsx code
 import Shell from '@/components/Shell';
 import { requireUser } from '@/lib/guard';
 import { companyStats, myQueue } from '@/lib/queries';
