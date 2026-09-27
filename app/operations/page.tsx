@@ -13,10 +13,10 @@ export default async function Operations() {
     opsTasks(),
   ]);
   return (
-    <Shell s={s} title="Operations" kicker="Approved sale → contract & deed → allocation docs (30 days)">
+    <Shell s={s} title="Operations" kicker="Approved sale → sale documents → allocation handoff (30 days)">
       <div className="grid2">
-        <WorkQueue title="Approved sales → create contract & deed" sales={approved} emptyLabel="Nothing waiting." />
-        <WorkQueue title="Portal open → upload deed of assignment & survey" sales={docsOpen} emptyLabel="Nothing waiting." />
+        <WorkQueue title="Approved sales → create sale documents" sales={approved} emptyLabel="Nothing waiting." />
+        <WorkQueue title="Portal open → allocation handoff" sales={docsOpen} emptyLabel="Nothing waiting." />
       </div>
       <div className="card" style={{ marginTop: 15 }}>
         <div className="section-title"><h3>Open operations tasks</h3><span className="badge">{tasks.length}</span></div>

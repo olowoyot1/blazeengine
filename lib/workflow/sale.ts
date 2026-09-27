@@ -5,10 +5,10 @@
  *  DRAFT ──submit_payment_proof──▶ PAYMENT_PROOF_SUBMITTED        Sales team uploads payment proof
  *  ──enter_invoice──▶ INVOICE_ENTERED                             Accountant enters invoice → back to Sales Mgr + Sales Exec
  *  ──approve_sale──▶ SALES_APPROVED                               Sales Manager approves → Operations receives approved sale
- *  ──create_contract──▶ CONTRACT_PREPARED                         Operations: contract + deed → back to Accounts
+ *  ──create_contract──▶ CONTRACT_PREPARED                         Operations: contract + acknowledgment + sales bundle → back to Accounts
  *  ──send_sales_documents──▶ ACCOUNT_DOCS_SENT                    Accountant: sales order, receipt, invoice sent
  *  ──open_ops_portal──▶ SITE_NOTIFIED                             Operations opens portal → Site Manager notified, ready for allocation (30-day clock)
- *  ──upload_allocation_docs──▶ OPS_DOCS_UPLOADED                  Operations: deed of assignment + survey (within 30 days)
+ *  ──upload_allocation_docs──▶ OPS_DOCS_UPLOADED                  Site Manager: deed of assignment + survey (within 30 days)
  *  ──final_audit──▶ IN_APPROVAL                                   Site Manager final audit, triggers all parties
  *      Sales Mgr → Operations Mgr → HR (internal audit) → CEO     approve one by one, then HR, then CEO
  *  ──(chain complete)──▶ FULLY_APPROVED                           (any rejection ⇒ RETURNED)
@@ -68,7 +68,7 @@ export const SALE_CHAIN: Step[] = [
   { step: 'HR internal audit', role: 'HR', seq: 3 },
   { step: 'CEO final approval', role: 'CEO', seq: 4 },
 ];
-const REQUIRED_DOCS = ['PAYMENT_PROOF', 'CONTRACT', 'DEED', 'DEED_OF_ASSIGNMENT', 'SURVEY_PLAN'];
+const REQUIRED_DOCS = ['PAYMENT_PROOF', 'CONTRACT', 'ACKNOWLEDGMENT_LETTER', 'SALES_DOCUMENTS', 'DEED_OF_ASSIGNMENT', 'SURVEY_PLAN'];
 const ALL_AFTER_APPROVAL = ['SITE_NOTIFIED', 'OPS_DOCS_UPLOADED', 'IN_APPROVAL', 'RETURNED', 'FULLY_APPROVED', 'PRE_ALLOCATION', 'ALLOCATION_SCHEDULED'];
 
 const reason: Field = { name: 'reason', label: 'Reason', type: 'textarea', required: true };
@@ -179,25 +179,27 @@ export const SALE_ACTIONS: SaleAction[] = [
       // require a *different* Sales Manager — one person shouldn't bless the same
       // sale twice under two different hats.
       await ctx.tx.query(`update sales set gate_approved_by=$2 where id=$1`, [s.id, ctx.actor.id]);
-      await openTask(ctx, s.id, 'CONTRACT_DEED');
-      const n = { title: 'Approved sale received', message: `${saleLabel(s)}. Create the contract and deed.`, link: saleLink(s) };
+      await openTask(ctx, s.id, 'SALE_DOCUMENTS');
+      const n = { title: 'Approved sale received', message: `${saleLabel(s)}. Create the Contract of Sale, Letter of Acknowledgment and Sales Documents bundle.`, link: saleLink(s) };
       await notifyRoles(ctx, OPS, n);
       await notifyUsers(ctx, [s.created_by], { ...n, title: 'Your sale was approved', message: `${saleLabel(s)} is with Operations.` });
     },
   },
   {
-    key: 'create_contract', label: 'Create contract & deed',
-    help: 'Operations prepares the contract and deed. On submission the sale goes back to Accounts.',
+    key: 'create_contract', label: 'Create sale documents',
+    help: 'Operations prepares the Contract of Sale, Letter of Acknowledgment and Sales Documents bundle. On submission the sale goes back to Accounts.',
     roles: OPS, from: ['SALES_APPROVED'], to: 'CONTRACT_PREPARED',
     fields: [
-      { name: 'contract_url', label: 'Contract document', type: 'file', required: true },
-      { name: 'deed_url', label: 'Deed document', type: 'file', required: true },
+      { name: 'contract_url', label: 'Contract of Sale', type: 'file', required: true },
+      { name: 'acknowledgment_url', label: 'Letter of Acknowledgment', type: 'file', required: true },
+      { name: 'sales_documents_url', label: 'Sales Documents bundle', type: 'file', required: true },
     ],
     async apply(ctx, s, i) {
-      await addDoc(ctx, s.id, 'CONTRACT', i.contract_url, 'Contract');
-      await addDoc(ctx, s.id, 'DEED', i.deed_url, 'Deed');
-      await closeTasks(ctx, s.id, 'CONTRACT_DEED');
-      await notifyRoles(ctx, ['ACCOUNTANT'], { title: 'Contract & deed ready', message: `${saleLabel(s)}. Prepare and send the sales order, receipt and invoice.`, link: saleLink(s) });
+      await addDoc(ctx, s.id, 'CONTRACT', i.contract_url, 'Contract of Sale');
+      await addDoc(ctx, s.id, 'ACKNOWLEDGMENT_LETTER', i.acknowledgment_url, 'Letter of Acknowledgment');
+      await addDoc(ctx, s.id, 'SALES_DOCUMENTS', i.sales_documents_url, 'Sales Documents bundle');
+      await closeTasks(ctx, s.id, 'SALE_DOCUMENTS');
+      await notifyRoles(ctx, ['ACCOUNTANT'], { title: 'Sale documents ready', message: `${saleLabel(s)}. Review the Operations documents and prepare any accounting records required.`, link: saleLink(s) });
     },
   },
   {
@@ -228,13 +230,13 @@ export const SALE_ACTIONS: SaleAction[] = [
     async apply(ctx, s, i) {
       await ctx.tx.query(`update sales set ops_due_date = current_date + ${ALLOCATION_WINDOW_DAYS} where id=$1`, [s.id]);
       await openTask(ctx, s.id, 'ALLOCATION_DOCS', ALLOCATION_WINDOW_DAYS, 'Deed of assignment + survey plan');
-      await notifyRoles(ctx, ['SITE_MANAGER'], { title: 'Sale ready for allocation', message: `${saleLabel(s)}.${i.note ? ` ${i.note}` : ''}`, link: saleLink(s) });
+      await notifyRoles(ctx, ['SITE_MANAGER'], { title: 'Sale ready for allocation', message: `${saleLabel(s)}. Site Management should upload the deed of assignment and survey plan.${i.note ? ` ${i.note}` : ''}`, link: saleLink(s) });
     },
   },
   {
     key: 'upload_allocation_docs', label: 'Upload deed of assignment & survey',
-    help: `Upload both documents to the portal (due ${ALLOCATION_WINDOW_DAYS} days after the portal was opened). The Site Manager is notified.`,
-    roles: OPS, from: ['SITE_NOTIFIED', 'RETURNED'], to: 'OPS_DOCS_UPLOADED',
+    help: `Site Management uploads the deed of assignment and survey plan to the portal (due ${ALLOCATION_WINDOW_DAYS} days after the portal was opened).`,
+    roles: ['SITE_MANAGER'], from: ['SITE_NOTIFIED', 'RETURNED'], to: 'OPS_DOCS_UPLOADED',
     fields: [
       { name: 'deed_of_assignment_url', label: 'Deed of assignment', type: 'file', required: true },
       { name: 'survey_plan_url', label: 'Survey plan', type: 'file', required: true },
