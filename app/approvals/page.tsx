@@ -12,6 +12,7 @@ export default async function Approvals() {
     <Shell s={s} title="Approval Centre" kicker="Sales Manager → Operations Manager → HR (internal audit) → CEO"><div style={{display:"flex",gap:6}}><a className="btn" href="/api/export?type=approvals&format=xls">Excel</a><a className="btn" href="/api/export?type=approvals&format=pdf">PDF</a></div>
       <div className="card">
         <div className="section-title"><h3>Waiting for your decision</h3><span className="badge">{mine.length}</span></div>
+        <p className="muted small" style={{ marginTop: 0 }}>Each item below explains the evidence you are expected to review. Approve only when the record is complete; reject with a reason when it needs correction.</p>
         {mine.length === 0 ? <div className="empty">Nothing is waiting on you right now.</div> : (
           <div>{mine.map((a: any) => <ApprovalRow key={a.id} a={a} />)}</div>
         )}
