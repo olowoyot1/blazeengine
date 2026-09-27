@@ -9,8 +9,8 @@ export function WorkQueue({ title, sales, emptyLabel }: { title: string; sales: 
       {sales.length === 0 ? <div className="empty">{emptyLabel}</div> : (
         <div className="table-wrap"><table className="table"><thead><tr><th>Client</th><th>Plot</th><th>Amount</th><th>Status</th><th></th></tr></thead>
           <tbody>{sales.map((r: any) => (
-            <tr key={r.id}><td>{r.client_name}</td><td>{r.plot_reference || r.property_name || '—'}</td><td>{naira(r.amount)}</td>
-              <td><Badge status={r.status} /></td><td><Link className="btn light" href={`/sales/${r.id}`}>Open</Link></td></tr>
+            <tr key={r.id}><td>{r.client_name || '—'}</td><td>{r.plot_reference || r.property_name || '—'}</td><td>{naira(r.amount ?? r.payment_amount ?? 0)}</td>
+              <td><Badge status={r.status || 'PENDING'} /></td><td><Link className="btn light" href={`/sales/${r.id}`}>Open</Link></td></tr>
           ))}</tbody>
         </table></div>
       )}

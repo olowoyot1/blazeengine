@@ -22,9 +22,11 @@ export default async function Operations() {
         <div className="section-title"><h3>Open operations tasks</h3><span className="badge">{tasks.length}</span></div>
         <div className="table-wrap"><table className="table"><thead><tr><th>Client</th><th>Task</th><th>Sale status</th><th>Due</th></tr></thead>
           <tbody>{tasks.map((t: any) => {
-            const overdue = t.due_date && daysUntil(t.due_date)! < 0;
-            return <tr key={t.id}><td>{t.client_name}</td><td>{t.task_type.replace(/_/g, ' ')}</td><td><Badge status={t.sale_status} /></td>
-              <td>{fmtDate(t.due_date)}{overdue && <span className="tag danger">OVERDUE</span>}</td></tr>;
+            const dueDays = t.due_date ? daysUntil(t.due_date) : null;
+            const overdue = dueDays !== null && dueDays < 0;
+            const taskLabel = String(t.task_type ?? 'Operations task').replace(/_/g, ' ');
+            return <tr key={t.id}><td>{t.client_name || '—'}</td><td>{taskLabel}</td><td><Badge status={t.sale_status || 'PENDING'} /></td>
+              <td>{t.due_date ? fmtDate(t.due_date) : 'No due date'}{overdue && <span className="tag danger">OVERDUE</span>}</td></tr>;
           })}</tbody>
         </table></div>
         {tasks.length === 0 && <div className="empty">No open tasks.</div>}
