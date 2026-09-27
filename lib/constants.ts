@@ -32,7 +32,8 @@ export const SALE_STATUS_LABEL: Record<string, string> = {
   CONTRACT_PREPARED: 'Sale documents ready · awaiting Accounts',
   ACCOUNT_DOCS_SENT: 'Sales documents sent · awaiting Operations',
   SITE_NOTIFIED: 'Ready for allocation · Operations docs due',
-  OPS_DOCS_UPLOADED: 'Operations docs uploaded · awaiting Site audit',
+  OPS_DEED_UPLOADED: 'Deed of assignment uploaded · awaiting Site survey',
+  OPS_DOCS_UPLOADED: 'Deed and survey uploaded · awaiting Site audit',
   IN_APPROVAL: 'In approval chain',
   RETURNED: 'Returned for correction',
   FULLY_APPROVED: 'Fully approved · awaiting pre-allocation',
@@ -43,7 +44,7 @@ export const SALE_STATUS_LABEL: Record<string, string> = {
 };
 export const SALE_STATUS_ORDER = [
   'PENDING_SALES_APPROVAL', 'DRAFT', 'PAYMENT_PROOF_SUBMITTED', 'INVOICE_ENTERED', 'SALES_APPROVED', 'CONTRACT_PREPARED',
-  'ACCOUNT_DOCS_SENT', 'SITE_NOTIFIED', 'OPS_DOCS_UPLOADED', 'IN_APPROVAL', 'RETURNED',
+  'ACCOUNT_DOCS_SENT', 'SITE_NOTIFIED', 'OPS_DEED_UPLOADED', 'OPS_DOCS_UPLOADED', 'IN_APPROVAL', 'RETURNED',
   'FULLY_APPROVED', 'PRE_ALLOCATION', 'ALLOCATION_SCHEDULED', 'ALLOCATED', 'CANCELLED',
 ];
 

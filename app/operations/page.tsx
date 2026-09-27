@@ -9,7 +9,7 @@ export default async function Operations() {
   const s = await requireCap('ops.workspace');
   const [approved, docsOpen, tasks] = await Promise.all([
     listSales(s, { status: 'SALES_APPROVED' }),
-    listSales(s, { statuses: ['SITE_NOTIFIED', 'RETURNED'] }),
+    listSales(s, { statuses: ['SITE_NOTIFIED', 'OPS_DEED_UPLOADED', 'RETURNED'] }),
     opsTasks(),
   ]);
   return (

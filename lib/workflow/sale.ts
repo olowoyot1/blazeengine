@@ -8,7 +8,8 @@
  *  ──create_contract──▶ CONTRACT_PREPARED                         Operations: contract + acknowledgment + sales bundle → back to Accounts
  *  ──send_sales_documents──▶ ACCOUNT_DOCS_SENT                    Accountant: sales order, receipt, invoice sent
  *  ──open_ops_portal──▶ SITE_NOTIFIED                             Operations opens portal → Site Manager notified, ready for allocation (30-day clock)
- *  ──upload_allocation_docs──▶ OPS_DOCS_UPLOADED                  Site Manager: deed of assignment + survey (within 30 days)
+ *  ──upload_deed_of_assignment──▶ OPS_DEED_UPLOADED               Operations: deed of assignment
+ *  ──upload_survey_plan──────────▶ OPS_DOCS_UPLOADED                Site Manager: survey plan (within 30 days)
  *  ──final_audit──▶ IN_APPROVAL                                   Site Manager final audit, triggers all parties
  *      Sales Mgr → Operations Mgr → HR (internal audit) → CEO     approve one by one, then HR, then CEO
  *  ──(chain complete)──▶ FULLY_APPROVED                           (any rejection ⇒ RETURNED)
@@ -245,20 +246,28 @@ export const SALE_ACTIONS: SaleAction[] = [
     },
   },
   {
-    key: 'upload_allocation_docs', label: 'Upload deed of assignment & survey',
-    help: `Site Management uploads the deed of assignment and survey plan to the portal (due ${ALLOCATION_WINDOW_DAYS} days after the portal was opened).`,
-    roles: ['SITE_MANAGER'], from: ['SITE_NOTIFIED', 'RETURNED'], to: 'OPS_DOCS_UPLOADED',
-    fields: [
-      { name: 'deed_of_assignment_url', label: 'Deed of assignment', type: 'file', required: true },
-      { name: 'survey_plan_url', label: 'Survey plan', type: 'file', required: true },
-    ],
+    key: 'upload_deed_of_assignment', label: 'Upload deed of assignment',
+    help: 'Operations uploads the deed of assignment. Site Management separately uploads the survey plan.',
+    roles: ['OPERATIONS', 'OPERATIONS_MANAGER'], from: ['SITE_NOTIFIED', 'OPS_DEED_UPLOADED', 'RETURNED'], to: 'OPS_DEED_UPLOADED',
+    fields: [{ name: 'deed_of_assignment_url', label: 'Deed of assignment', type: 'file', required: true }],
     async apply(ctx, s, i) {
       await addDoc(ctx, s.id, 'DEED_OF_ASSIGNMENT', i.deed_of_assignment_url, 'Deed of assignment');
+      await notifyRoles(ctx, ['SITE_MANAGER'], { title: 'Deed of assignment ready', message: `${saleLabel(s)}. Upload the survey plan.`, link: saleLink(s) });
+    },
+  },
+  {
+    key: 'upload_survey_plan', label: 'Upload survey plan',
+    help: 'Site Management uploads the survey plan after Operations has uploaded the deed of assignment.',
+    roles: ['SITE_MANAGER'], from: ['SITE_NOTIFIED', 'OPS_DEED_UPLOADED', 'RETURNED'], to: 'OPS_DOCS_UPLOADED',
+    fields: [{ name: 'survey_plan_url', label: 'Survey plan', type: 'file', required: true }],
+    async apply(ctx, s, i) {
+      const deed = await one(ctx, `select id from sale_documents where sale_id=$1 and document_type='DEED_OF_ASSIGNMENT' limit 1`, [s.id]);
+      if (!deed) throw new WorkflowError('Operations must upload the deed of assignment before the Site Manager uploads the survey plan');
       await addDoc(ctx, s.id, 'SURVEY_PLAN', i.survey_plan_url, 'Survey plan');
       await closeTasks(ctx, s.id, 'ALLOCATION_DOCS');
       const due = d10(s.ops_due_date);
       const late = !!due && isoDay(new Date()) > due;
-      await notifyRoles(ctx, ['SITE_MANAGER'], { title: 'Operations documents uploaded', message: `${saleLabel(s)}. Perform the final audit.`, link: saleLink(s) });
+      await notifyRoles(ctx, ['SITE_MANAGER'], { title: 'Allocation documents uploaded', message: `${saleLabel(s)}. Perform the final audit.`, link: saleLink(s) });
       return late ? `LATE – documents were due ${due}` : 'On time';
     },
   },
