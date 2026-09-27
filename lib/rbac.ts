@@ -10,7 +10,7 @@ const ALL_REPORTS: Cap[] = ['report.sales','report.hr','report.ops','report.site
 export const CAPS: Record<Role, Cap[]> = {
   SUPER_ADMIN: ['lead.read','lead.read_all','lead.write','client.read','client.write','sale.read','sale.read_all','sale.create','accounts.workspace','ops.workspace','site.workspace','finance.workspace','expense.read','expense.read_all','expense.create_negotiation','approvals.read',...ALL_REPORTS,'hr.workspace','hr.payroll','payroll.read','chat.read','users.manage','admins.manage','departments.manage','audit.read'],
   ADMIN: ['lead.read_all','payroll.read','chat.read','client.read','sale.read_all','expense.read_all','approvals.read',...ALL_REPORTS,'users.manage','departments.manage','audit.read'],
-  CEO: ['lead.read_all','payroll.read','chat.read','client.read','sale.read_all','expense.read_all','approvals.read',...ALL_REPORTS,'audit.read'],
+  CEO: ['lead.read_all','lead.write','payroll.read','chat.read','client.read','client.write','sale.read_all','sale.create','accounts.workspace','ops.workspace','site.workspace','finance.workspace','expense.read_all','expense.create_negotiation','approvals.read',...ALL_REPORTS,'hr.workspace','hr.payroll','audit.read'],
   HR: ['hr.workspace','hr.payroll','payroll.read','chat.read','lead.read_all','client.read','sale.read_all','expense.read_all','approvals.read',...ALL_REPORTS.filter(c=>c!=='report.company'),'audit.read'],
   SALES_MANAGER: ['chat.read','lead.read_all','lead.write','client.read','client.write','sale.read_all','sale.create','approvals.read','report.sales'],
   SALES: ['chat.read','lead.read','lead.write','client.read','client.write','sale.read','sale.create'], MARKETER: ['chat.read','lead.read','lead.write','client.read','client.write'],
