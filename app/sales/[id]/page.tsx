@@ -1,7 +1,7 @@
 import Shell from '@/components/Shell';
 import { notFound } from 'next/navigation';
 import { requireCap } from '@/lib/guard';
-import { getSale } from '@/lib/queries';
+import { getSale, listActiveApprovers } from '@/lib/queries';
 import { Badge } from '@/components/Badge';
 import { ApprovalDecisionPanel } from '@/components/ApprovalDecisionPanel';
 import { naira, fmtDateTime, human } from '@/lib/format';
@@ -14,10 +14,18 @@ const MAIN_LINE = ['PENDING_SALES_APPROVAL', 'DRAFT', 'PAYMENT_PROOF_SUBMITTED',
 export default async function SaleDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const s = await requireCap('sale.read', 'sale.read_all');
-  const data = await getSale(s, id);
+  const [data, approvers] = await Promise.all([getSale(s, id), listActiveApprovers()]);
   if (!data) notFound();
   const { sale, docs, events, approvals, records, tasks, actionableApproval } = data;
-  const actions = availableSaleActions(sale as any, s).map(a => ({ key: a.key, label: a.label, help: a.help, danger: a.danger, fields: a.fields }));
+  const approverOptions = (role: string) => approvers.filter((u: any) => u.role === role).map((u: any) => `${u.id} — ${u.name}`);
+  const actions = availableSaleActions(sale as any, s).map(a => ({
+    key: a.key, label: a.label, help: a.help, danger: a.danger,
+    fields: a.fields.map((field: any) => {
+      const roleByField: Record<string, string> = { sales_manager_id: 'SALES_MANAGER', operations_manager_id: 'OPERATIONS_MANAGER', hr_id: 'HR', ceo_id: 'CEO' };
+      const role = roleByField[field.name];
+      return role ? { ...field, type: 'select', options: approverOptions(role) } : field;
+    }),
+  }));
   const curIdx = MAIN_LINE.indexOf(sale.status);
 
   return (

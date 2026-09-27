@@ -180,6 +180,7 @@ CREATE TABLE IF NOT EXISTS approvals(
   seq int NOT NULL DEFAULT 1,
   step text NOT NULL,
   approver_role text NOT NULL,
+  approver_user_id uuid REFERENCES users(id),
   status text NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','APPROVED','REJECTED','CANCELLED')),
   comment text,
   submitted_by uuid REFERENCES users(id),
@@ -248,7 +249,8 @@ ON CONFLICT (name) DO NOTHING;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS session_version int NOT NULL DEFAULT 0;
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS quoted_amount numeric(14,2);
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS gate_approved_by uuid REFERENCES users(id);
-ALTER TABLE sales ADD COLUMN IF NOT EXISTS invoice_variance_reason text;
+  ALTER TABLE sales ADD COLUMN IF NOT EXISTS invoice_variance_reason text;
+  ALTER TABLE approvals ADD COLUMN IF NOT EXISTS approver_user_id uuid REFERENCES users(id);
 UPDATE sales SET quoted_amount = amount WHERE quoted_amount IS NULL;
 
 -- v3.2 additions: SUPER_ADMIN role, managed departments, real file uploads, client

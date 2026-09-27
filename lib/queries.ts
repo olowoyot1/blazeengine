@@ -93,6 +93,9 @@ export async function getExpense(u: U, id: string) {
 }
 
 // ---------------------------------------------------------------- Approvals
+export async function listActiveApprovers() {
+  return sql`select id, name, role from users where active=true and role in ('SALES_MANAGER','OPERATIONS_MANAGER','HR','CEO') order by role, name`;
+}
 /** Return one approval step this user can act on for a specific record. */
 export async function actionableApprovalForEntity(u: U, entityType: 'SALE' | 'EXPENSE', entityId: string) {
   if (!/^[0-9a-f-]{36}$/i.test(entityId)) return null;
@@ -107,7 +110,7 @@ export async function actionableApprovalForEntity(u: U, entityType: 'SALE' | 'EX
     left join payroll_runs p on a.entity_type='PAYROLL' and p.id=a.entity_id
     left join users sub on sub.id=a.submitted_by
     where a.entity_type=${entityType} and a.entity_id=${entityId}::uuid
-      and a.status='PENDING' and (${u.role}='SUPER_ADMIN' or a.approver_role=${u.role})
+      and a.status='PENDING' and (${u.role}='SUPER_ADMIN' or (a.approver_role=${u.role} and (a.approver_user_id is null or a.approver_user_id=${u.id}::uuid)))
       and a.submitted_by is distinct from ${u.id}::uuid
       and not exists (
         select 1 from approvals p where p.entity_type=a.entity_type and p.entity_id=a.entity_id

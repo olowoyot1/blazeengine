@@ -243,6 +243,10 @@ export const SALE_ACTIONS: SaleAction[] = [
     roles: ['SITE_MANAGER'], from: ['OPS_DOCS_UPLOADED', 'RETURNED'], to: 'IN_APPROVAL',
     fields: [
       { name: 'audit_findings', label: 'Audit findings', type: 'textarea', required: true },
+      { name: 'sales_manager_id', label: 'Sales Manager approver', type: 'text', required: true },
+      { name: 'operations_manager_id', label: 'Operations Manager approver', type: 'text', required: true },
+      { name: 'hr_id', label: 'HR approver', type: 'text', required: true },
+      { name: 'ceo_id', label: 'CEO approver', type: 'text', required: true },
       { name: 'confirmed', label: 'I confirm all documents were reviewed', type: 'checkbox', required: true },
     ],
     async apply(ctx, s, i) {
@@ -254,7 +258,17 @@ export const SALE_ACTIONS: SaleAction[] = [
       await siteRecord(ctx, s.id, 'FINAL_SALE_AUDIT', { findings: i.audit_findings });
       const round = Number(s.chain_round) + 1;
       await ctx.tx.query(`update sales set chain_round=$2, returned_reason=null where id=$1`, [s.id, round]);
-      await openRound(ctx, 'SALE', s.id, 'SALE_CHAIN', round, SALE_CHAIN);
+      const assignments = { sales_manager_id: 'SALES_MANAGER', operations_manager_id: 'OPERATIONS_MANAGER', hr_id: 'HR', ceo_id: 'CEO' } as const;
+      const steps = SALE_CHAIN.map(step => {
+        const field = Object.entries(assignments).find(([, role]) => role === step.role)?.[0] as keyof typeof i | undefined;
+        return { ...step, userId: field ? String(i[field] || '') : '' };
+      });
+      const selected = steps.map(step => step.userId).filter(Boolean);
+      if (selected.length !== new Set(selected).size) throw new WorkflowError('Each approval step must be assigned to a different user');
+      const valid = await many(ctx, `select id, role from users where id = any($1::uuid[]) and active=true`, [selected]);
+      if (valid.length !== steps.length || steps.some(step => !valid.some(user => user.id === step.userId && user.role === step.role)))
+        throw new WorkflowError('Select an active user with the correct designation for every approval step');
+      await openRound(ctx, 'SALE', s.id, 'SALE_CHAIN', round, steps);
       await notifyRoles(ctx, ['OPERATIONS_MANAGER', 'HR', 'CEO', 'ACCOUNTANT'], { title: 'Final audit completed', message: `${saleLabel(s)} entered the approval chain.`, link: saleLink(s) });
       await notifyUsers(ctx, [s.created_by], { title: 'Sale in approval chain', message: saleLabel(s), link: saleLink(s) });
       return String(i.audit_findings);

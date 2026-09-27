@@ -2,7 +2,7 @@ import type { Role } from '../constants';
 import { ForbiddenError, WorkflowError, audit, logEvent, many, notifyRoles, one, run, type Actor, type Ctx } from './core';
 import type { Row } from '../db';
 
-export type Step = { step: string; role: Role; seq: number };
+export type Step = { step: string; role: Role; seq: number; userId?: string };
 type Entity = 'SALE' | 'EXPENSE' | 'PAYROLL';
 
 /** Each approval round registers what happens when it completes or is rejected. */
@@ -29,9 +29,9 @@ export async function openRound(
 ) {
   for (const s of steps) {
     await ctx.tx.query(
-      `insert into approvals(entity_type,entity_id,round,round_no,seq,step,approver_role,submitted_by)
-       values($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [entity, entityId, round, roundNo, s.seq, s.step, s.role, ctx.actor.id],
+      `insert into approvals(entity_type,entity_id,round,round_no,seq,step,approver_role,approver_user_id,submitted_by)
+       values($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [entity, entityId, round, roundNo, s.seq, s.step, s.role, s.userId ?? null, ctx.actor.id],
     );
   }
   const first = Math.min(...steps.map(s => s.seq));
@@ -69,6 +69,7 @@ export async function decide(actor: Actor, approvalId: string, decision: 'APPROV
 
     if (a.status !== 'PENDING') throw new WorkflowError('This step has already been actioned');
     if (actor.role !== 'SUPER_ADMIN' && a.approver_role !== actor.role) throw new ForbiddenError(`Only ${a.approver_role.replace(/_/g, ' ')} can action this step`);
+    if (a.approver_user_id && a.approver_user_id !== actor.id && actor.role !== 'SUPER_ADMIN') throw new ForbiddenError('This approval is assigned to another user');
     if (a.submitted_by && a.submitted_by === actor.id) throw new ForbiddenError('You cannot approve an item you submitted (separation of duties)');
     if (h.conflict) {
       const problem = await h.conflict(ctx, a, actor);
