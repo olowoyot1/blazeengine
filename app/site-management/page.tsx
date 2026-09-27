@@ -27,7 +27,7 @@ export default async function SiteManagement() {
       </div>
 
       <div className="grid2" style={{ marginTop: 15 }}>
-        <WorkQueue title="Operations docs uploaded → final audit" sales={needsAudit} emptyLabel="Nothing waiting." />
+        <WorkQueue title="Allocation documents uploaded → final review" sales={needsAudit} emptyLabel="Nothing waiting." />
         <WorkQueue title="Fully approved → send soft copy & start pre-allocation" sales={fullyApproved} emptyLabel="Nothing waiting." />
       </div>
       <div className="grid2" style={{ marginTop: 15 }}>
