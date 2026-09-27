@@ -8,6 +8,7 @@ import { naira, fmtDateTime, human } from '@/lib/format';
 import { availableSaleActions } from '@/lib/workflow/sale';
 import { SALE_STATUS_ORDER, SALE_STATUS_LABEL } from '@/lib/constants';
 import { SaleActionPanel } from './SaleActionPanel';
+import { EditSaleForm } from './EditSaleForm';
 
 const MAIN_LINE = ['PENDING_SALES_APPROVAL', 'DRAFT', 'PAYMENT_PROOF_SUBMITTED', 'INVOICE_ENTERED', 'SALES_APPROVED', 'CONTRACT_PREPARED', 'ACCOUNT_DOCS_SENT', 'SITE_NOTIFIED', 'OPS_DOCS_UPLOADED', 'IN_APPROVAL', 'FULLY_APPROVED', 'PRE_ALLOCATION', 'ALLOCATION_SCHEDULED', 'ALLOCATED'];
 
@@ -59,6 +60,14 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
           <SaleActionPanel saleId={sale.id} actions={actions} />
         </div>
       </div>
+
+      {sale.status === 'PENDING_SALES_APPROVAL' && (s.role === 'SALES_MANAGER' || s.role === 'SUPER_ADMIN') && (
+        <div className="card" style={{ marginTop: 15 }}>
+          <h3>Edit sale before approval</h3>
+          <p className="muted small">Adjust the commercial details if needed, then review the updated overview and approve the sale.</p>
+          <EditSaleForm sale={sale as any} />
+        </div>
+      )}
 
       <ApprovalDecisionPanel approval={actionableApproval} />
 

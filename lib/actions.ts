@@ -9,7 +9,7 @@ import { sendMail } from './email';
 import { WorkflowError, ForbiddenError } from './workflow/core';
 import { decide } from './workflow/approvals';
 import { submitPayroll, disbursePayroll } from './workflow/payroll';
-import { performSaleAction, createSale } from './workflow/sale';
+import { performSaleAction, createSale, updateSale } from './workflow/sale';
 import { performExpenseAction, createNegotiation, createDirectExpense } from './workflow/expense';
 import { createLead, setLeadStatus, convertLead } from './workflow/leads';
 import { ROLES, type Role } from './constants';
@@ -35,6 +35,11 @@ export async function actExpense(id: string, key: string, input: Record<string, 
 export async function actDecide(approvalId: string, decision: 'APPROVED' | 'REJECTED', comment: string): Promise<Result> {
   const s = await requireUser();
   try { await decide(s, approvalId, decision, comment); revalidatePath('/approvals'); revalidatePath('/sales'); revalidatePath('/expenses'); revalidatePath('/dashboard'); revalidatePath('/notifications'); return { ok: true }; }
+  catch (e) { return toErr(e); }
+}
+export async function editSale(saleId: string, input: Record<string, unknown>): Promise<Result> {
+  const s = await requireUser();
+  try { const id = await updateSale(s, saleId, input); revalidatePath(`/sales/${saleId}`); revalidatePath('/sales'); revalidatePath('/dashboard'); revalidatePath('/notifications'); return { ok: true, id }; }
   catch (e) { return toErr(e); }
 }
 export async function newSale(input: Record<string, unknown>): Promise<Result> {

@@ -31,7 +31,7 @@ export function NewSaleForm({ clients, initialClientId }: { clients: { id: strin
     start(async () => {
       const r = await newSale(values);
       if ('error' in r) setError(r.error);
-      else if (r.id) router.push('/sales');
+      else if (r.id) router.push(`/sales/${r.id}?created=1`);
     });
   }
   return (

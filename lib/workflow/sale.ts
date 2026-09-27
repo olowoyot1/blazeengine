@@ -400,6 +400,31 @@ export async function performSaleAction(actor: Actor, saleId: string, key: strin
 }
 const stageOf = (a: SaleAction) => a.roles.includes('SITE_MANAGER') ? 'SITE_MANAGEMENT' : a.roles.includes('ACCOUNTANT') ? 'ACCOUNTS' : a.roles.includes('OPERATIONS') ? 'OPERATIONS' : 'SALES';
 
+const SALE_EDIT_FIELDS: Field[] = [
+  { name: 'property_name', label: 'Estate / property', type: 'text', required: true },
+  { name: 'plot_reference', label: 'Plot reference', type: 'text', required: true },
+  { name: 'estate_value', label: 'Estate value (₦)', type: 'number', required: true, min: 1 },
+  { name: 'payment_amount', label: 'Payment amount (₦)', type: 'number', required: true, min: 1 },
+  { name: 'payment_plan', label: 'Payment plan', type: 'select', required: true, options: ['OUTRIGHT', 'INSTALLMENT'] },
+  { name: 'description', label: 'Description', type: 'textarea' },
+];
+
+export async function updateSale(actor: Actor, saleId: string, input: Record<string, unknown>) {
+  if (actor.role !== 'SUPER_ADMIN' && !['SALES_MANAGER'].includes(actor.role)) throw new ForbiddenError('Only a Sales Manager can edit a submitted sale');
+  const p = parseFields(SALE_EDIT_FIELDS, input);
+  return run(actor, async ctx => {
+    const sale = await one(ctx, `select * from sales where id=$1 for update`, [saleId]);
+    if (!sale) throw new WorkflowError('Sale not found');
+    if (sale.status !== 'PENDING_SALES_APPROVAL') throw new WorkflowError('Only a sale awaiting Sales Manager approval can be edited');
+    const taken = await one(ctx, `select id from sales where lower(property_name)=lower($1) and lower(plot_reference)=lower($2) and id<>$3 and status<>'CANCELLED' limit 1`, [p.property_name, p.plot_reference, saleId]);
+    if (taken) throw new WorkflowError('This plot is already attached to another active sale');
+    await ctx.tx.query(`update sales set property_name=$2, plot_reference=$3, estate_value=$4, payment_amount=$5, quoted_amount=$4, amount=$5, payment_plan=$6, description=$7, updated_at=now() where id=$1`, [saleId, p.property_name, p.plot_reference, p.estate_value, p.payment_amount, p.payment_plan, p.description]);
+    await logEvent(ctx, 'SALE', saleId, 'SALES', 'Sale adjusted by Sales Manager', sale.status, sale.status, `${p.property_name} / ${p.plot_reference}`);
+    await notifyUsers(ctx, [sale.created_by], { title: 'Sale adjusted by Sales Manager', message: `${saleLabel(sale)} was adjusted during approval review.`, link: saleLink(saleId) });
+    return saleId;
+  });
+}
+
 export async function createSale(actor: Actor, input: Record<string, unknown>) {
   if (actor.role !== 'SUPER_ADMIN' && !['SALES', 'SALES_MANAGER'].includes(actor.role)) throw new ForbiddenError('Only the sales team can create sales');
   const p = parseFields([
