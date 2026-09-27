@@ -42,7 +42,9 @@ export function NewSaleForm({ clients }: { clients: { id: string; name: string; 
         </div>
         <div><label className="field">Estate / property *</label><input className="input" required value={values.property_name ?? ''} onChange={e => set('property_name', e.target.value)} /></div>
         <div><label className="field">Plot reference *</label><input className="input" required value={values.plot_reference ?? ''} onChange={e => set('plot_reference', e.target.value)} /></div>
-        <div><label className="field">Sale amount (₦) *</label><input className="input" type="number" min={1} required value={values.amount ?? ''} onChange={e => set('amount', e.target.value)} /></div>
+        <div><label className="field">Estate value (₦) *</label><input className="input" type="number" min={1} required value={values.estate_value ?? ''} onChange={e => set('estate_value', e.target.value)} /></div>
+        <div><label className="field">Payment amount (₦) *</label><input className="input" type="number" min={1} required value={values.payment_amount ?? ''} onChange={e => set('payment_amount', e.target.value)} /></div>
+        <div><label className="field">Payment plan *</label><select className="select" required value={values.payment_plan ?? ''} onChange={e => set('payment_plan', e.target.value)}><option value="" disabled>Select payment plan…</option><option value="OUTRIGHT">Outright</option><option value="INSTALLMENT">Installmental</option></select></div>
         <div className="full-row"><label className="field">Description</label><textarea className="textarea" value={values.description ?? ''} onChange={e => set('description', e.target.value)} /></div>
         <div className="full-row notice">
           <strong>Payment evidence</strong>

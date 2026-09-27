@@ -36,8 +36,8 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
           <table className="table"><tbody>
             <tr><td className="muted">Client</td><td>{sale.client_name} {sale.client_email ? `(${sale.client_email})` : ''}</td></tr>
             <tr><td className="muted">Property / Plot</td><td>{sale.property_name || '—'} / {sale.plot_reference || '—'}</td></tr>
-            <tr><td className="muted">Amount</td><td>{naira(sale.amount)}</td></tr>
-            <tr><td className="muted">Payment</td><td><Badge status={sale.payment_status} label={sale.payment_status.replace(/_/g, ' ')} /> {sale.payment_reference || ''}</td></tr>
+            <tr><td className="muted">Estate value</td><td>{naira(sale.estate_value ?? sale.quoted_amount ?? sale.amount)}</td></tr>
+            <tr><td className="muted">Payment</td><td>{naira(sale.payment_amount ?? sale.amount)} · {sale.payment_plan === 'INSTALLMENT' ? 'Installmental' : sale.payment_plan === 'OUTRIGHT' ? 'Outright' : '—'} · <Badge status={sale.payment_status} label={sale.payment_status.replace(/_/g, ' ')} /> {sale.payment_reference || ''}</td></tr>
             <tr><td className="muted">Invoice / SO / SR / SI</td><td>{[sale.invoice_number, sale.sales_order_no, sale.sales_receipt_no, sale.sales_invoice_no].filter(Boolean).join(' · ') || '—'}</td></tr>
             <tr><td className="muted">Ops documents due</td><td>{sale.ops_due_date || '—'}</td></tr>
             <tr><td className="muted">Allocation date</td><td>{sale.allocation_date || 'Not scheduled'}</td></tr>

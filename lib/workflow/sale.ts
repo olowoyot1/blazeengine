@@ -77,7 +77,7 @@ export const SALE_ACTIONS: SaleAction[] = [
   {
     key: 'approve_new_sale', label: 'Approve new sale',
     help: 'Sales Manager reviews the newly created sale. Payment processing cannot start until this approval is completed.',
-    roles: ['SALES_MANAGER'], from: ['PENDING_SALES_APPROVAL'], to: 'DRAFT',
+    roles: ['SALES_MANAGER'], from: ['PENDING_SALES_APPROVAL', 'PAYMENT_PROOF_SUBMITTED'], to: 'DRAFT',
     fields: [{ name: 'note', label: 'Approval note (optional)', type: 'textarea' }],
     async apply(ctx, s, i) {
       await ctx.tx.query(`update sales set gate_approved_by=$2 where id=$1`, [s.id, ctx.actor.id]);
@@ -93,7 +93,7 @@ export const SALE_ACTIONS: SaleAction[] = [
   {
     key: 'submit_payment_proof', label: 'Upload payment proof', ownOnly: true,
     help: 'Client has paid. Attach the payment proof link and reference – Accounts is notified.',
-    roles: ['SALES', 'SALES_MANAGER'], from: ['DRAFT'], to: 'PAYMENT_PROOF_SUBMITTED',
+    roles: ['SALES', 'SALES_MANAGER'], from: ['PENDING_SALES_APPROVAL', 'DRAFT'], to: 'PAYMENT_PROOF_SUBMITTED',
     fields: [
       { name: 'proof_url', label: 'Payment proof', type: 'file', required: true, uploadPurpose: 'sales_payment_evidence' },
       { name: 'payment_reference', label: 'Payment reference', type: 'text', required: true },
@@ -103,7 +103,8 @@ export const SALE_ACTIONS: SaleAction[] = [
       await assertFreshEvidence(ctx, i.proof_url, 'payment proof');
       await addDoc(ctx, s.id, 'PAYMENT_PROOF', i.proof_url, 'Payment proof');
       await ctx.tx.query(`update sales set payment_status='PROOF_SUBMITTED', payment_reference=$2 where id=$1`, [s.id, i.payment_reference]);
-      await notifyRoles(ctx, ['ACCOUNTANT'], { title: 'Payment proof uploaded', message: `${saleLabel(s)} — reference ${i.payment_reference}. Enter the invoice.`, link: saleLink(s) });
+      await notifyRoles(ctx, ['SALES_MANAGER'], { title: 'Payment proof awaiting approval', message: `${saleLabel(s)} — reference ${i.payment_reference}. Approve or cancel this sale.`, link: saleLink(s) });
+      await notifyRoles(ctx, ['ACCOUNTANT', 'FINANCE_OPERATIONS'], { title: 'Payment proof submitted', message: `${saleLabel(s)} is awaiting Sales Manager approval before Accounts processing.`, link: saleLink(s) });
       return `Payment ref ${i.payment_reference}${i.amount_paid ? ` (${money(i.amount_paid)})` : ''}`;
     },
   },
@@ -121,7 +122,7 @@ export const SALE_ACTIONS: SaleAction[] = [
   {
     key: 'enter_invoice', label: 'Enter invoice',
     help: 'Verify the payment and enter the invoice. If the amount differs from the original quote by more than 2%, a reason is required. On submission the sale goes back to the Sales Manager and Sales Executive.',
-    roles: ['ACCOUNTANT'], from: ['PAYMENT_PROOF_SUBMITTED'], to: 'INVOICE_ENTERED',
+    roles: ['ACCOUNTANT', 'FINANCE_OPERATIONS'], from: ['PAYMENT_PROOF_SUBMITTED', 'DRAFT'], to: 'INVOICE_ENTERED',
     fields: [
       { name: 'invoice_number', label: 'Invoice number', type: 'text', required: true },
       { name: 'invoice_amount', label: 'Invoice amount (₦)', type: 'number', required: true, min: 1 },
@@ -379,8 +380,10 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
     { name: 'client_id', label: 'Client', type: 'text', required: true },
     { name: 'property_name', label: 'Estate / property', type: 'text', required: true },
     { name: 'plot_reference', label: 'Plot reference', type: 'text', required: true },
-    { name: 'amount', label: 'Sale amount (₦)', type: 'number', required: true, min: 1 },
-    { name: 'description', label: 'Description', type: 'textarea' },
+{ name: 'estate_value', label: 'Estate value (₦)', type: 'number', required: true, min: 1 },
+  { name: 'payment_amount', label: 'Payment amount (₦)', type: 'number', required: true, min: 1 },
+  { name: 'payment_plan', label: 'Payment plan', type: 'text', required: true },
+  { name: 'description', label: 'Description', type: 'textarea' },
     { name: 'payment_proof_url', label: 'Payment evidence', type: 'file', uploadPurpose: 'sales_payment_evidence' },
     { name: 'payment_reference', label: 'Payment reference', type: 'text' },
   ], input);
@@ -398,16 +401,16 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
     }
     const paymentStatus = p.payment_proof_url ? 'PROOF_SUBMITTED' : 'UNPAID';
     const s = (await one(ctx,
-      `insert into sales(client_id,lead_id,client_name,client_email,property_name,plot_reference,amount,quoted_amount,description,status,payment_status,payment_reference,created_by)
-       values($1,(select id from leads where client_id=$1 limit 1),$2,$3,$4,$5,$6,$6,$7,'PENDING_SALES_APPROVAL',$8,$9,$10) returning id`,
-      [client.id, client.name, client.email, p.property_name, p.plot_reference, p.amount, p.description, paymentStatus, p.payment_reference ?? null, actor.id]))!;
+`insert into sales(client_id,lead_id,client_name,client_email,property_name,plot_reference,amount,estate_value,payment_amount,quoted_amount,payment_plan,description,status,payment_status,payment_reference,created_by)
+  values($1,(select id from leads where client_id=$1 limit 1),$2,$3,$4,$5,$6,$7,$8,$7,$9,$10,'PENDING_SALES_APPROVAL',$11,$12,$13) returning id`,
+  [client.id, client.name, client.email, p.property_name, p.plot_reference, p.estate_value, p.estate_value, p.payment_amount, p.payment_plan, p.description, paymentStatus, p.payment_reference ?? null, actor.id]))!;
     if (p.payment_proof_url) {
       const m = String(p.payment_proof_url).match(/^\/api\/files\/([0-9a-f-]{36})$/i)!;
       await ctx.tx.query(`insert into sale_documents(sale_id,document_type,document_name,document_url,uploaded_file_id,uploaded_by) values($1,'PAYMENT_PROOF','Payment evidence',$2,$3::uuid,$4)`, [s.id, p.payment_proof_url, m[1], actor.id]);
     }
-    await logEvent(ctx, 'SALE', s.id, 'SALES', 'Sale created', null, 'PENDING_SALES_APPROVAL', `${p.property_name} / ${p.plot_reference} · ${money(p.amount)}${p.payment_proof_url ? ' · payment evidence attached' : ''}`);
+    await logEvent(ctx, 'SALE', s.id, 'SALES', 'Sale created', null, 'PENDING_SALES_APPROVAL', `${p.property_name} / ${p.plot_reference} · estate ${money(p.estate_value)} · payment ${money(p.payment_amount)} (${p.payment_plan})${p.payment_proof_url ? ' · payment evidence attached' : ''}`);
     await audit(ctx, 'SALE_CREATED', 'SALE', s.id, { client: client.name, payment_evidence_attached: !!p.payment_proof_url });
-    await notifyRoles(ctx, ['SALES_MANAGER'], { title: 'New sale awaiting approval', message: `${client.name} — ${p.property_name} / ${p.plot_reference} · ${money(p.amount)}. Review the sale and any attached payment evidence before approval.`, link: saleLink(s.id) });
+    await notifyRoles(ctx, ['SALES_MANAGER'], { title: 'New sale awaiting approval', message: `${client.name} — ${p.property_name} / ${p.plot_reference} · estate ${money(p.estate_value)} · payment ${money(p.payment_amount)} (${p.payment_plan}). Review the sale and any attached payment evidence before approval.`, link: saleLink(s.id) });
     return s.id as string;
   });
 }
