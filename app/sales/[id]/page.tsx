@@ -28,6 +28,7 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
     }),
   }));
   const curIdx = MAIN_LINE.indexOf(sale.status);
+  const documentsApproved = sale.status === 'CONTRACT_PREPARED' && approvals.filter((a: any) => a.round === 'SALE_DOCUMENTS_APPROVAL' && a.status === 'APPROVED').length >= 2;
 
   return (
     <Shell s={s} title={`${sale.client_name} — ${sale.plot_reference || sale.property_name || ''}`} kicker="Sale">
@@ -58,6 +59,7 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
         <div className="card">
           <h3>Your action</h3>
           <SaleActionPanel saleId={sale.id} actions={actions} />
+          {documentsApproved && <a className="btn green" href="https://landblaze.oaatz.com" target="_blank" rel="noreferrer" style={{ display: 'inline-block', marginTop: 12 }}>Open Landblaze Portal</a>}
         </div>
       </div>
 

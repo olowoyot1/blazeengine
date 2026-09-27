@@ -199,7 +199,16 @@ export const SALE_ACTIONS: SaleAction[] = [
       await addDoc(ctx, s.id, 'ACKNOWLEDGMENT_LETTER', i.acknowledgment_url, 'Letter of Acknowledgment');
       await addDoc(ctx, s.id, 'SALES_DOCUMENTS', i.sales_documents_url, 'Sales Documents bundle');
       await closeTasks(ctx, s.id, 'SALE_DOCUMENTS');
-      await notifyRoles(ctx, ['ACCOUNTANT'], { title: 'Sale documents ready', message: `${saleLabel(s)}. Review the Operations documents and prepare any accounting records required.`, link: saleLink(s) });
+      const originator = await one(ctx, `select id, role from users where id=$1 and active=true`, [s.created_by]);
+      if (!originator) throw new WorkflowError('The sales originator is no longer active and cannot approve these documents');
+      const originatorRole: Role = originator.role === 'SALES_MANAGER' ? 'SALES_MANAGER' : 'SALES';
+      const steps: Step[] = [
+        { step: 'Sales originator approval', role: originatorRole, seq: 1, userId: s.created_by },
+        { step: 'Sales Manager approval', role: 'SALES_MANAGER', seq: 2, userId: undefined },
+      ];
+      await openRound(ctx, 'SALE', s.id, 'SALE_DOCUMENTS_APPROVAL', Number(s.chain_round || 0) + 1, steps);
+      await notifyUsers(ctx, [s.created_by], { title: 'Operations documents ready for your approval', message: `${saleLabel(s)} — review the Contract of Sale, Letter of Acknowledgment and Sales Documents bundle.`, link: saleLink(s) });
+      await notifyRoles(ctx, ['SALES_MANAGER'], { title: 'Operations documents awaiting approval', message: `${saleLabel(s)} — review the three documents submitted by Operations.`, link: saleLink(s) });
     },
   },
   {
@@ -213,6 +222,8 @@ export const SALE_ACTIONS: SaleAction[] = [
       { name: 'documents_url', label: 'Documents bundle (optional)', type: 'file' },
     ],
     async apply(ctx, s, i) {
+      const documentApprovals = await one(ctx, `select count(*)::int as n from approvals where entity_type='SALE' and entity_id=$1 and round='SALE_DOCUMENTS_APPROVAL' and status='APPROVED'`, [s.id]);
+      if (Number(documentApprovals?.n || 0) < 2) throw new WorkflowError('Sales originator and Sales Manager must approve the Operations documents first');
       await ctx.tx.query(`update sales set sales_order_no=$2, sales_receipt_no=$3, sales_invoice_no=$4 where id=$1`,
         [s.id, i.sales_order_no, i.sales_receipt_no, i.sales_invoice_no]);
       await addDoc(ctx, s.id, 'SALES_DOCUMENTS', i.documents_url, 'Sales order, receipt & invoice');
@@ -469,6 +480,25 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
 }
 
 // ---- Approval-chain outcomes -------------------------------------------------
+registerRound('SALE_DOCUMENTS_APPROVAL', {
+  entity: 'SALE',
+  link: id => `/sales/${id}`,
+  async title(ctx, id) { const s = await one(ctx, `select * from sales where id=$1`, [id]); return s ? `${saleLabel(s)} — Operations documents` : ''; },
+  async onComplete(ctx, a) {
+    const s = (await one(ctx, `select * from sales where id=$1`, [a.entity_id]))!;
+    await logEvent(ctx, 'SALE', s.id, 'APPROVAL', 'Operations documents approved by Sales', 'CONTRACT_PREPARED', 'CONTRACT_PREPARED', null);
+    const n = { title: 'Operations documents approved', message: `${saleLabel(s)}. Accounts can now prepare the sales documents and the Landblaze portal is available.`, link: saleLink(s) };
+    await notifyRoles(ctx, ['ACCOUNTANT'], n);
+    await notifyUsers(ctx, [s.created_by], n);
+  },
+  async onReject(ctx, a, comment) {
+    const s = (await one(ctx, `update sales set status='RETURNED', returned_reason=$2, updated_at=now() where id=$1 returning *`, [a.entity_id, `${a.step}: ${comment}`]))!;
+    const n = { title: 'Operations documents returned', message: `${saleLabel(s)} — ${a.step}: ${comment}`, link: saleLink(s) };
+    await notifyRoles(ctx, ['OPERATIONS', 'OPERATIONS_MANAGER'], n);
+    await notifyUsers(ctx, [s.created_by], n);
+  },
+});
+
 registerRound('SALE_CHAIN', {
   entity: 'SALE',
   link: id => `/sales/${id}`,
