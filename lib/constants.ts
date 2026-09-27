@@ -24,7 +24,8 @@ export const ALLOCATION_WINDOW_DAYS = 30; // allocation date / ops docs "within 
 
 /** Ordered sale lifecycle. RETURNED/CANCELLED sit outside the happy path. */
 export const SALE_STATUS_LABEL: Record<string, string> = {
-  DRAFT: 'Draft (awaiting payment proof)',
+  PENDING_SALES_APPROVAL: 'Pending Sales Manager approval',
+  DRAFT: 'Approved for payment proof',
   PAYMENT_PROOF_SUBMITTED: 'Payment proof submitted',
   INVOICE_ENTERED: 'Invoice entered · awaiting Sales Manager',
   SALES_APPROVED: 'Approved sale · awaiting contract/deed',
@@ -41,7 +42,7 @@ export const SALE_STATUS_LABEL: Record<string, string> = {
   CANCELLED: 'Cancelled',
 };
 export const SALE_STATUS_ORDER = [
-  'DRAFT', 'PAYMENT_PROOF_SUBMITTED', 'INVOICE_ENTERED', 'SALES_APPROVED', 'CONTRACT_PREPARED',
+  'PENDING_SALES_APPROVAL', 'DRAFT', 'PAYMENT_PROOF_SUBMITTED', 'INVOICE_ENTERED', 'SALES_APPROVED', 'CONTRACT_PREPARED',
   'ACCOUNT_DOCS_SENT', 'SITE_NOTIFIED', 'OPS_DOCS_UPLOADED', 'IN_APPROVAL', 'RETURNED',
   'FULLY_APPROVED', 'PRE_ALLOCATION', 'ALLOCATION_SCHEDULED', 'ALLOCATED', 'CANCELLED',
 ];
@@ -51,6 +52,7 @@ export const EXPENSE_STATUS_LABEL: Record<string, string> = {
   NEGOTIATION_APPROVED: 'Negotiation approved · Accounts to enter expense',
   EXPENSE_ENTERED: 'Expense entered · Ops, HR & CEO approval',
   EXPENSE_APPROVED: 'Expense approved · Finance to pay',
+  FULLY_APPROVED: 'Fully approved · Finance to disburse & upload payment evidence',
   PAYMENT_PROOF_UPLOADED: 'Bank proof uploaded · Ops & HR review, then CEO',
   PAYMENT_APPROVED: 'Payment approved · awaiting bank alert',
   PAID: 'Paid · awaiting receipt',

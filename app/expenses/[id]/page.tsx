@@ -8,13 +8,15 @@ import { naira, fmtDateTime, human } from '@/lib/format';
 import { availableExpenseActions } from '@/lib/workflow/expense';
 import { EXPENSE_STATUS_LABEL } from '@/lib/constants';
 import { ExpenseActionPanel } from './ExpenseActionPanel';
+import ExpenseDocuments from './ExpenseDocuments';
+import FinancePaymentDocuments from './FinancePaymentDocuments';
 
 export default async function ExpenseDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const s = await requireCap('expense.read', 'expense.read_all', 'finance.workspace');
   const data = await getExpense(s, id);
   if (!data) notFound();
-  const { expense: e, events, approvals, actionableApproval } = data;
+  const { expense: e, events, approvals, documents, paymentDocuments, actionableApproval } = data;
   const actions = availableExpenseActions(e as any, s).map(a => ({ key: a.key, label: a.label, help: a.help, danger: a.danger, fields: a.fields }));
 
   return (
@@ -40,6 +42,9 @@ export default async function ExpenseDetail({ params }: { params: Promise<{ id: 
       </div>
 
       <ApprovalDecisionPanel approval={actionableApproval} />
+
+      <ExpenseDocuments expenseId={e.id} documents={documents as any[]} />
+      <FinancePaymentDocuments documents={paymentDocuments as any[]} />
 
       <div className="card" style={{ marginTop: 15 }}>
         <h3>Approval chain</h3>

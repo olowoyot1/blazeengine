@@ -48,6 +48,7 @@ async function main() {
   const unread = async (userId: string) => Number(((await pg.query(`select count(*) n from notifications where user_id=$1`, [userId])).rows[0] as any).n);
   const pendingFor = async (id: string, role: string) => (await pg.query(`select * from approvals where entity_id=$1 and approver_role=$2 and status='PENDING' order by created_at`, [id, role])).rows as any[];
   const act = (a: wf.Actor, id: string, key: string, input: any = {}) => wf.performSaleAction(a, id, key, input);
+  const createApprovedSale = async (a: wf.Actor, input: any) => { const id = await wf.createSale(a, input); await act(U.SALES_MANAGER, id, 'approve_new_sale', {}); return id; };
   // File fields now only accept our own /api/files/<uuid> paths (produced by an
   // actual upload), so tests fabricate a stable, distinct fake path per name —
   // preserving the "same link reused" duplicate-evidence test below.
@@ -89,6 +90,8 @@ async function main() {
     await denied(wf.createSale(U.MARKETER, f), /Only the sales team/);
     sale = await wf.createSale(U.SALES, f);
     await denied(wf.createSale(U.SALES_MANAGER, { ...f, plot_reference: 'a-12' }), /already attached/);
+    assert.equal(await status(sale), 'PENDING_SALES_APPROVAL');
+    await act(U.SALES_MANAGER, sale, 'approve_new_sale', {});
     assert.equal(await status(sale), 'DRAFT');
   });
   await t('wrong role / wrong owner / wrong stage are rejected', async () => {
@@ -207,12 +210,12 @@ async function main() {
   });
   await t('cancel: allowed for sales manager/CEO only, blocked after pre-allocation', async () => {
     const c2 = await wf.convertLead(U.SALES_MANAGER, await wf.createLead(U.SALES_MANAGER, { name: 'Bayo', phone: '0900' }));
-    const s2 = await wf.createSale(U.SALES, { client_id: c2, property_name: 'Blaze Estate', plot_reference: 'B-1', amount: '100' });
+    const s2 = await createApprovedSale(U.SALES, { client_id: c2, property_name: 'Blaze Estate', plot_reference: 'B-1', amount: '100' });
     await denied(act(U.SALES, s2, 'cancel_sale', { reason: 'x' }), /not permitted/);
     await act(U.CEO, s2, 'cancel_sale', { reason: 'Client withdrew' });
     assert.equal(await status(s2), 'CANCELLED');
     // freed plot can be resold
-    await wf.createSale(U.SALES, { client_id: c2, property_name: 'Blaze Estate', plot_reference: 'B-1', amount: '100' });
+    await createApprovedSale(U.SALES, { client_id: c2, property_name: 'Blaze Estate', plot_reference: 'B-1', amount: '100' });
     await denied(act(U.CEO, sale, 'cancel_sale', { reason: 'x' }), /Not available/);
   });
 
@@ -244,24 +247,13 @@ async function main() {
   });
   await t('row15: CEO approves after ops & HR → finance ops notified', async () => {
     for (const r of ['OPERATIONS_MANAGER', 'HR', 'CEO'] as const) { const [a] = await pendingFor(ex, r); await wf.decide(U[r], a.id, 'APPROVED'); }
-    assert.equal(await estatus(ex), 'EXPENSE_APPROVED');
+    assert.equal(await estatus(ex), 'FULLY_APPROVED');
     assert.ok(await unread(U.FINANCE_OPERATIONS.id) >= 1);
   });
-  await t('row16: finance ops uploads bank proof; rejected proof loops back, re-upload works', async () => {
-    await denied(wf.performExpenseAction(U.ACCOUNTANT, ex, 'upload_bank_proof', { bank_proof_url: url('b'), bank_reference: 'B1' }), /not permitted/);
-    await wf.performExpenseAction(U.FINANCE_OPERATIONS, ex, 'upload_bank_proof', { bank_proof_url: url('b'), bank_reference: 'B1' });
-    assert.equal(await estatus(ex), 'PAYMENT_PROOF_UPLOADED');
-    const [h] = await pendingFor(ex, 'HR');
-    await wf.decide(U.HR, h.id, 'REJECTED', 'Screenshot unreadable');
-    assert.equal(await estatus(ex), 'EXPENSE_APPROVED');
-    await wf.performExpenseAction(U.FINANCE_OPERATIONS, ex, 'upload_bank_proof', { bank_proof_url: url('b2'), bank_reference: 'B1' });
-    for (const r of ['OPERATIONS_MANAGER', 'HR', 'CEO'] as const) { const [a] = await pendingFor(ex, r); await wf.decide(U[r], a.id, 'APPROVED'); }
-    assert.equal(await estatus(ex), 'PAYMENT_APPROVED');
-  });
-  await t('row17: bank alert → PAID, all team members notified', async () => {
-    await denied(wf.performExpenseAction(U.SITE_MANAGER, ex, 'record_bank_alert', { bank_alert_ref: 'A1' }), /not permitted/);
+  await t('row16: finance ops disburses after CEO approval and uploads payment evidence', async () => {
+    await denied(wf.performExpenseAction(U.SITE_MANAGER, ex, 'disburse_and_upload_proof', { bank_proof_url: url('b'), bank_reference: 'B1', bank_alert_ref: 'A1' }), /not permitted/);
     const before = await unread(U.SITE_MANAGER.id);
-    await wf.performExpenseAction(U.FINANCE_OPERATIONS, ex, 'record_bank_alert', { bank_alert_ref: 'ALERT-1' });
+    await wf.performExpenseAction(U.FINANCE_OPERATIONS, ex, 'disburse_and_upload_proof', { bank_proof_url: url('b'), bank_reference: 'B1', bank_alert_ref: 'A1' });
     assert.equal(await estatus(ex), 'PAID');
     assert.equal(await unread(U.SITE_MANAGER.id), before + 1);
   });
@@ -284,7 +276,7 @@ async function main() {
   });
   await t('atomicity: a failing action leaves no partial writes', async () => {
     const c3 = await wf.convertLead(U.SALES_MANAGER, await wf.createLead(U.SALES_MANAGER, { name: 'Chi', phone: '0777' }));
-    const s3 = await wf.createSale(U.SALES, { client_id: c3, property_name: 'Blaze Estate', plot_reference: 'C-1', amount: '100' });
+    const s3 = await createApprovedSale(U.SALES, { client_id: c3, property_name: 'Blaze Estate', plot_reference: 'C-1', amount: '100' });
     const docsBefore = Number(((await pg.query(`select count(*) n from sale_documents`)).rows[0] as any).n);
     await denied(act(U.SALES, s3, 'submit_payment_proof', { proof_url: url('p'), payment_reference: '' }), /required/);
     assert.equal(Number(((await pg.query(`select count(*) n from sale_documents`)).rows[0] as any).n), docsBefore);
@@ -295,14 +287,14 @@ async function main() {
   console.log('\nHardening fixes');
   await t('invoice amount >2% off the original quote requires a reason', async () => {
     const c4 = await wf.convertLead(U.SALES_MANAGER, await wf.createLead(U.SALES_MANAGER, { name: 'Hard1', phone: '0711' }));
-    const sH = await wf.createSale(U.SALES, { client_id: c4, property_name: 'Blaze Estate', plot_reference: 'H-1', amount: '1000000' });
+    const sH = await createApprovedSale(U.SALES, { client_id: c4, property_name: 'Blaze Estate', plot_reference: 'H-1', amount: '1000000' });
     await act(U.SALES, sH, 'submit_payment_proof', { proof_url: url('h1proof'), payment_reference: 'RH1' });
     await denied(act(U.ACCOUNTANT, sH, 'enter_invoice', { invoice_number: 'INV-H1', invoice_amount: '1200000' }), /differs from the original quote/);
     await act(U.ACCOUNTANT, sH, 'enter_invoice', { invoice_number: 'INV-H1', invoice_amount: '1200000', variance_reason: 'Client added extra plot fee' });
     assert.equal(await status(sH), 'INVOICE_ENTERED');
     // within 2% needs no reason
     const c5 = await wf.convertLead(U.SALES_MANAGER, await wf.createLead(U.SALES_MANAGER, { name: 'Hard2', phone: '0712' }));
-    const sH2 = await wf.createSale(U.SALES, { client_id: c5, property_name: 'Blaze Estate', plot_reference: 'H-2', amount: '1000000' });
+    const sH2 = await createApprovedSale(U.SALES, { client_id: c5, property_name: 'Blaze Estate', plot_reference: 'H-2', amount: '1000000' });
     await act(U.SALES, sH2, 'submit_payment_proof', { proof_url: url('h2proof'), payment_reference: 'RH2' });
     await act(U.ACCOUNTANT, sH2, 'enter_invoice', { invoice_number: 'INV-H2', invoice_amount: '1010000' });
     assert.equal(await status(sH2), 'INVOICE_ENTERED');
@@ -310,7 +302,7 @@ async function main() {
 
   await t('the Sales Manager who approved the sale cannot also be the chain\'s Sales Manager approver', async () => {
     const c6 = await wf.convertLead(U.SALES_MANAGER, await wf.createLead(U.SALES_MANAGER, { name: 'Hard3', phone: '0713' }));
-    const sH3 = await wf.createSale(U.SALES, { client_id: c6, property_name: 'Blaze Estate', plot_reference: 'H-3', amount: '500000' });
+    const sH3 = await createApprovedSale(U.SALES, { client_id: c6, property_name: 'Blaze Estate', plot_reference: 'H-3', amount: '500000' });
     await act(U.SALES, sH3, 'submit_payment_proof', { proof_url: url('h3proof'), payment_reference: 'RH3' });
     await act(U.ACCOUNTANT, sH3, 'enter_invoice', { invoice_number: 'INV-H3', invoice_amount: '500000' });
     await act(U.SALES_MANAGER, sH3, 'approve_sale', {});
@@ -341,7 +333,7 @@ async function main() {
     assert.equal(await estatus(eR), 'NEGOTIATION_APPROVED');
     await wf.performExpenseAction(U.ACCOUNTANT, eR, 'enter_expense', { amount: '50000' });
     for (const r of ['OPERATIONS_MANAGER', 'HR', 'CEO'] as const) { const [a] = await pendingFor(eR, r); await wf.decide(U[r], a.id, 'APPROVED'); }
-    assert.equal(await estatus(eR), 'EXPENSE_APPROVED');
+    assert.equal(await estatus(eR), 'FULLY_APPROVED');
   });
 
   await t('a fully rejected negotiation can be revised and resubmitted', async () => {
@@ -358,8 +350,8 @@ async function main() {
 
   await t('reused evidence links are rejected', async () => {
     const c7 = await wf.convertLead(U.SALES_MANAGER, await wf.createLead(U.SALES_MANAGER, { name: 'Hard4', phone: '0714' }));
-    const sA = await wf.createSale(U.SALES, { client_id: c7, property_name: 'Blaze Estate', plot_reference: 'H-4a', amount: '100' });
-    const sB = await wf.createSale(U.SALES, { client_id: c7, property_name: 'Blaze Estate', plot_reference: 'H-4b', amount: '100' });
+    const sA = await createApprovedSale(U.SALES, { client_id: c7, property_name: 'Blaze Estate', plot_reference: 'H-4a', amount: '100' });
+    const sB = await createApprovedSale(U.SALES, { client_id: c7, property_name: 'Blaze Estate', plot_reference: 'H-4b', amount: '100' });
     const sameUrl = url('reused-proof');
     await act(U.SALES, sA, 'submit_payment_proof', { proof_url: sameUrl, payment_reference: 'RA' });
     await denied(act(U.SALES, sB, 'submit_payment_proof', { proof_url: sameUrl, payment_reference: 'RB' }), /already been used as evidence/);
@@ -397,7 +389,7 @@ async function main() {
   await t('file-type fields only accept our own /api/files/ paths, not arbitrary links', async () => {
     const leadId2 = await wf.createLead(U.SALES, { name: 'File Test', phone: '0744' });
     const clientId2 = await wf.convertLead(U.SALES, leadId2);
-    const s9 = await wf.createSale(U.SALES, { client_id: clientId2, property_name: 'Blaze Estate', plot_reference: 'F-1', amount: '100' });
+    const s9 = await createApprovedSale(U.SALES, { client_id: clientId2, property_name: 'Blaze Estate', plot_reference: 'F-1', amount: '100' });
     await denied(act(U.SALES, s9, 'submit_payment_proof', { proof_url: 'https://example.com/proof.pdf', payment_reference: 'RF1' }), /please upload the file/);
     await act(U.SALES, s9, 'submit_payment_proof', { proof_url: url('filetest'), payment_reference: 'RF1' });
     assert.equal(await status(s9), 'PAYMENT_PROOF_SUBMITTED');

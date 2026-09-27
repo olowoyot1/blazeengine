@@ -1,5 +1,5 @@
 /** LEAD MANAGEMENT (sheet: Sales team / Marketer – 10 leads per day, converts them to clients) */
-import { ForbiddenError, WorkflowError, audit, notifyRoles, one, parseFields, run, type Actor } from './core';
+import { ForbiddenError, WorkflowError, audit, notifyRoles, notifyUsers, one, parseFields, run, type Actor } from './core';
 
 const LEAD_ROLES = ['MARKETER', 'SALES', 'SALES_MANAGER'];
 
@@ -25,6 +25,7 @@ export async function createLead(actor: Actor, input: Record<string, unknown>) {
       `insert into leads(name,phone,email,source,notes,owner_id) values($1,$2,$3,$4,$5,$6) returning id`,
       [p.name, p.phone, p.email, p.source, p.notes, actor.id]))!;
     await audit(ctx, 'LEAD_CREATED', 'LEAD', l.id, { name: p.name });
+    if (actor.role !== 'SALES_MANAGER') await notifyRoles(ctx, ['SALES_MANAGER'], { title: 'New lead captured', message: `${p.name} was added as a new lead and is ready for sales follow-up.`, link: '/leads' });
     return l.id as string;
   });
 }
@@ -38,6 +39,8 @@ export async function setLeadStatus(actor: Actor, leadId: string, status: string
     if (l.status === 'CONVERTED') throw new WorkflowError('Lead is already converted');
     await ctx.tx.query(`update leads set status=$2, updated_at=now() where id=$1`, [leadId, status]);
     await audit(ctx, 'LEAD_STATUS', 'LEAD', leadId, { from: l.status, to: status });
+    await notifyUsers(ctx, [l.owner_id], { title: `Lead status updated: ${status}`, message: `${l.name} moved from ${l.status} to ${status}.`, link: '/leads' });
+    if (actor.role !== 'SALES_MANAGER') await notifyRoles(ctx, ['SALES_MANAGER'], { title: `Lead status updated: ${status}`, message: `${l.name} moved from ${l.status} to ${status}.`, link: '/leads' });
   });
 }
 

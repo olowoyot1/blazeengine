@@ -4,13 +4,12 @@ import { requireCap } from '@/lib/guard';
 import { getSale } from '@/lib/queries';
 import { Badge } from '@/components/Badge';
 import { ApprovalDecisionPanel } from '@/components/ApprovalDecisionPanel';
-import SupportingDocuments from './SupportingDocuments';
 import { naira, fmtDateTime, human } from '@/lib/format';
 import { availableSaleActions } from '@/lib/workflow/sale';
 import { SALE_STATUS_ORDER, SALE_STATUS_LABEL } from '@/lib/constants';
 import { SaleActionPanel } from './SaleActionPanel';
 
-const MAIN_LINE = ['DRAFT', 'PAYMENT_PROOF_SUBMITTED', 'INVOICE_ENTERED', 'SALES_APPROVED', 'CONTRACT_PREPARED', 'ACCOUNT_DOCS_SENT', 'SITE_NOTIFIED', 'OPS_DOCS_UPLOADED', 'IN_APPROVAL', 'FULLY_APPROVED', 'PRE_ALLOCATION', 'ALLOCATION_SCHEDULED', 'ALLOCATED'];
+const MAIN_LINE = ['PENDING_SALES_APPROVAL', 'DRAFT', 'PAYMENT_PROOF_SUBMITTED', 'INVOICE_ENTERED', 'SALES_APPROVED', 'CONTRACT_PREPARED', 'ACCOUNT_DOCS_SENT', 'SITE_NOTIFIED', 'OPS_DOCS_UPLOADED', 'IN_APPROVAL', 'FULLY_APPROVED', 'PRE_ALLOCATION', 'ALLOCATION_SCHEDULED', 'ALLOCATED'];
 
 export default async function SaleDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -64,7 +63,6 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
                 <a href={d.document_url} target="_blank" rel="noreferrer">{d.document_url}</a></li>
             ))}</ul>
           )}
-          <SupportingDocuments saleId={sale.id} />
           <h3 style={{ marginTop: 18 }}>Operations tasks</h3>
           {tasks.length === 0 ? <div className="muted small">None.</div> : (
             <ul className="timeline">{tasks.map((t: any) => (

@@ -1,4 +1,4 @@
-import { ForbiddenError, WorkflowError, audit, notifyRoles, one, run, type Actor, type Ctx } from './core';
+import { ForbiddenError, WorkflowError, audit, notifyRoles, notifyUsers, one, run, type Actor, type Ctx } from './core';
 import { openRound, registerRound } from './approvals';
 
 type PEntity = 'PAYROLL';
@@ -8,9 +8,16 @@ registerRound('PAYROLL_CEO_APPROVAL', {
   entity: 'PAYROLL',
   onComplete: async (ctx, approval) => {
     await ctx.tx.query(`update payroll_runs set status='APPROVED', approved_by=$2, approved_at=now(), updated_at=now() where id=$1`, [approval.entity_id, approval.acted_by]);
+    const p = await one(ctx, `select payroll_month,total_net,created_by from payroll_runs where id=$1`, [approval.entity_id]);
+    const n = { title: 'Payroll approved – ready for disbursement', message: `Payroll ${p?.payroll_month ?? ''} has been approved by the CEO and is ready for Finance/Accounts disbursement.`, link: '/hr/payroll' };
+    await notifyRoles(ctx, ['ACCOUNTANT','FINANCE_OPERATIONS','HR'], n);
+    if (p?.created_by) await notifyUsers(ctx, [p.created_by], { ...n, title: 'Your payroll was approved' });
   },
   onReject: async (ctx, approval, comment) => {
     await ctx.tx.query(`update payroll_runs set status='REJECTED', notes=coalesce(notes,'') || $2, updated_at=now() where id=$1`, [approval.entity_id, `\nCEO rejection: ${comment}`]);
+    const p = await one(ctx, `select payroll_month,created_by from payroll_runs where id=$1`, [approval.entity_id]);
+    const n = { title: 'Payroll rejected', message: `Payroll ${p?.payroll_month ?? ''} was rejected by the CEO: ${comment}`, link: '/hr/payroll' };
+    await notifyRoles(ctx, ['HR'], n);
   },
   link: () => '/hr/payroll',
   title: async (ctx, entityId) => {
@@ -46,6 +53,7 @@ export async function disbursePayroll(actor: Actor, payrollId: string) {
     await ctx.tx.query(`update payroll_items set payment_status='DISBURSED',disbursed_at=now() where payroll_run_id=$1`, [payrollId]);
     await ctx.tx.query(`update payroll_runs set status='DISBURSED',disbursed_by=$2,disbursed_at=now(),updated_at=now() where id=$1`, [payrollId, actor.id]);
     await audit(ctx, 'PAYROLL_DISBURSED', 'PAYROLL', payrollId, {});
+    await notifyRoles(ctx, ['HR','ACCOUNTANT','FINANCE_OPERATIONS'], { title: 'Payroll disbursed', message: `Payroll ${p.payroll_month} has been disbursed.`, link: '/hr/payroll' });
     return { ok: true };
   });
 }

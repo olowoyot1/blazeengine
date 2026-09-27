@@ -24,49 +24,76 @@ function toErr(e: unknown): Result {
 
 export async function actSale(saleId: string, key: string, input: Record<string, unknown>): Promise<Result> {
   const s = await requireUser();
-  try { await performSaleAction(s, saleId, key, input); revalidatePath(`/sales/${saleId}`); revalidatePath('/sales'); revalidatePath('/dashboard'); return { ok: true }; }
+  try { await performSaleAction(s, saleId, key, input); revalidatePath(`/sales/${saleId}`); revalidatePath('/sales'); revalidatePath('/dashboard'); revalidatePath('/notifications'); return { ok: true }; }
   catch (e) { return toErr(e); }
 }
 export async function actExpense(id: string, key: string, input: Record<string, unknown>): Promise<Result> {
   const s = await requireUser();
-  try { await performExpenseAction(s, id, key, input); revalidatePath(`/expenses/${id}`); revalidatePath('/expenses'); return { ok: true }; }
+  try { await performExpenseAction(s, id, key, input); revalidatePath(`/expenses/${id}`); revalidatePath('/expenses'); revalidatePath('/notifications'); return { ok: true }; }
   catch (e) { return toErr(e); }
 }
 export async function actDecide(approvalId: string, decision: 'APPROVED' | 'REJECTED', comment: string): Promise<Result> {
   const s = await requireUser();
-  try { await decide(s, approvalId, decision, comment); revalidatePath('/approvals'); revalidatePath('/sales'); revalidatePath('/expenses'); revalidatePath('/dashboard'); return { ok: true }; }
+  try { await decide(s, approvalId, decision, comment); revalidatePath('/approvals'); revalidatePath('/sales'); revalidatePath('/expenses'); revalidatePath('/dashboard'); revalidatePath('/notifications'); return { ok: true }; }
   catch (e) { return toErr(e); }
 }
 export async function newSale(input: Record<string, unknown>): Promise<Result> {
   const s = await requireUser();
-  try { const id = await createSale(s, input); revalidatePath('/sales'); return { ok: true, id }; }
+  try { const id = await createSale(s, input); revalidatePath('/sales'); revalidatePath('/notifications'); return { ok: true, id }; }
   catch (e) { return toErr(e); }
 }
 export async function newLead(input: Record<string, unknown>): Promise<Result> {
   const s = await requireUser();
-  try { await createLead(s, input); revalidatePath('/leads'); return { ok: true }; }
+  try { await createLead(s, input); revalidatePath('/leads'); revalidatePath('/notifications'); return { ok: true }; }
   catch (e) { return toErr(e); }
 }
 export async function actLeadStatus(id: string, status: string): Promise<Result> {
   const s = await requireUser();
-  try { await setLeadStatus(s, id, status); revalidatePath('/leads'); return { ok: true }; }
+  try { await setLeadStatus(s, id, status); revalidatePath('/leads'); revalidatePath('/notifications'); return { ok: true }; }
   catch (e) { return toErr(e); }
 }
 export async function actConvertLead(id: string): Promise<Result> {
   const s = await requireUser();
-  try { const cid = await convertLead(s, id); revalidatePath('/leads'); return { ok: true, id: cid }; }
+  try { const cid = await convertLead(s, id); revalidatePath('/leads'); revalidatePath('/notifications'); return { ok: true, id: cid }; }
   catch (e) { return toErr(e); }
 }
 export async function newNegotiation(input: Record<string, unknown>): Promise<Result> {
   const s = await requireUser();
-  try { const id = await createNegotiation(s, input); revalidatePath('/expenses'); return { ok: true, id }; }
+  try { const id = await createNegotiation(s, input); revalidatePath('/expenses'); revalidatePath('/notifications'); return { ok: true, id }; }
   catch (e) { return toErr(e); }
 }
 export async function newDirectExpense(input: Record<string, unknown>): Promise<Result> {
   const s = await requireUser();
-  try { const id = await createDirectExpense(s, input); revalidatePath('/expenses'); return { ok: true, id }; }
+  try { const id = await createDirectExpense(s, input); revalidatePath('/expenses'); revalidatePath('/notifications'); return { ok: true, id }; }
   catch (e) { return toErr(e); }
 }
+export async function attachExpenseDocument(expenseId: string, documentType: string, documentName: string, filePath: string): Promise<Result> {
+  const s = await requireCap('expense.read', 'expense.read_all', 'finance.workspace');
+  try {
+    if (!/^[0-9a-f-]{36}$/i.test(expenseId)) return { error: 'Invalid expense' };
+    const m = filePath.match(/^\/api\/files\/([0-9a-f-]{36})$/i);
+    if (!m) return { error: 'Invalid document upload' };
+    const f = await sql`select id from uploaded_files where id=${m[1]}::uuid and uploaded_by=${s.id}::uuid`;
+    if (!f.length) return { error: 'You can only attach files you uploaded.' };
+    const e = await sql`select id from expenses where id=${expenseId}::uuid`;
+    if (!e.length) return { error: 'Expense not found' };
+    await sql`insert into expense_documents(expense_id,document_type,document_name,uploaded_file_id,uploaded_by)
+      values(${expenseId}::uuid,${documentType.trim() || 'SUPPORTING_DOCUMENT'},${documentName.trim().slice(0,200)},${m[1]}::uuid,${s.id}::uuid)`;
+    revalidatePath(`/expenses/${expenseId}`); revalidatePath('/expenses');
+    return { ok: true };
+  } catch (e) { return toErr(e); }
+}
+
+export async function markNotificationRead(id: string): Promise<Result> {
+  const s = await requireUser({ allowPasswordChange: true });
+  try {
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return { error: 'Invalid notification' };
+    await sql`update notifications set read_at=coalesce(read_at,now()) where id=${id}::uuid and user_id=${s.id}::uuid`;
+    revalidatePath('/notifications');
+    return { ok: true };
+  } catch (e) { return toErr(e); }
+}
+
 export async function markNotificationsRead(): Promise<Result> {
   const s = await requireUser({ allowPasswordChange: true });
   await sql`update notifications set read_at=now() where user_id=${s.id}::uuid and read_at is null`;
@@ -267,6 +294,7 @@ export async function saveClientProfile(clientId: string, input: Record<string, 
     const { updateClientProfile } = await import('./workflow/clients');
     await updateClientProfile(s, clientId, input);
     revalidatePath(`/clients/${clientId}`);
+    revalidatePath('/clients');
     revalidatePath('/leads');
     return { ok: true };
   } catch (e) { return toErr(e); }
@@ -280,7 +308,6 @@ export async function createEmployee(input: {firstName:string;lastName:string;em
 }
 export async function decideLeave(id:string, decision:'APPROVED'|'REJECTED'):Promise<Result>{const s=await requireCap('hr.workspace');try{await sql`update leave_requests set status=${decision},approved_by=${s.id}::uuid,approved_at=now() where id=${id}::uuid and status='PENDING'`;revalidatePath('/hr');return {ok:true};}catch(e){return toErr(e);}}
 
-export async function attachSaleDocument(saleId:string, documentType:string, documentName:string, documentUrl:string):Promise<Result>{const s=await requireUser();try{if(!/^[0-9a-f-]{36}$/i.test(saleId))return {error:'Invalid sale'};if(!documentUrl.startsWith('/api/files/'))return {error:'Invalid document'};await sql`insert into sale_documents(sale_id,document_type,document_name,document_url,uploaded_by) values(${saleId}::uuid,${documentType.trim()||'SUPPORTING_DOCUMENT'},${documentName.trim()},${documentUrl},${s.id}::uuid)`;revalidatePath(`/sales/${saleId}`);revalidatePath('/approvals');return {ok:true};}catch(e){return toErr(e);}}
 
 export async function createLeaveRequest(input:{employeeId:string;leaveType:string;startDate:string;endDate:string;days:number;reason?:string}):Promise<Result>{const s=await requireCap('hr.workspace');try{await sql`insert into leave_requests(employee_id,leave_type,start_date,end_date,days,reason) values(${input.employeeId}::uuid,${input.leaveType},${input.startDate},${input.endDate},${input.days},${input.reason||null})`;revalidatePath('/hr');return {ok:true};}catch(e){return toErr(e);}}
 export async function recordAttendance(input:{employeeId:string;workDate:string;status:string;checkIn?:string;checkOut?:string;notes?:string}):Promise<Result>{const s=await requireCap('hr.workspace');try{await sql`insert into attendance(employee_id,work_date,status,check_in,check_out,notes) values(${input.employeeId}::uuid,${input.workDate},${input.status},${input.checkIn||null},${input.checkOut||null},${input.notes||null}) on conflict(employee_id,work_date) do update set status=excluded.status,check_in=excluded.check_in,check_out=excluded.check_out,notes=excluded.notes`;revalidatePath('/hr');return {ok:true};}catch(e){return toErr(e);}}

@@ -15,7 +15,7 @@
 import type { Role } from '../constants';
 import { EXPENSE_STATUS_LABEL } from '../constants';
 import {
-  ForbiddenError, WorkflowError, assertFreshEvidence, audit, logEvent, money, notifyRoles, notifyUsers, one, parseFields, run,
+  ForbiddenError, WorkflowError, assertFreshEvidence, assertOwnedUpload, audit, logEvent, money, notifyRoles, notifyUsers, one, parseFields, run,
   type Actor, type Ctx, type Field, type Parsed,
 } from './core';
 import type { Row } from '../db';
@@ -48,6 +48,7 @@ export const EXPENSE_ACTIONS: ExpenseAction[] = [
     roles: ['ACCOUNTANT'], from: ['NEGOTIATION_APPROVED'], to: 'EXPENSE_ENTERED',
     fields: [
       { name: 'amount', label: 'Expense amount (₦)', type: 'number', required: true, min: 1 },
+      { name: 'source_document_url', label: 'Expense source document', type: 'file', uploadPurpose: 'expense_source_document' },
       { name: 'variance_reason', label: 'Variance reason (if above negotiated amount)', type: 'textarea' },
     ],
     async apply(ctx, e, i) {
@@ -59,25 +60,37 @@ export const EXPENSE_ACTIONS: ExpenseAction[] = [
           throw new WorkflowError(`Amount exceeds the negotiated ${money(e.negotiated_amount)} – give a variance reason`);
       }
       const round = Number(e.round_no) + 1;
+      if (i.source_document_url) {
+        await assertOwnedUpload(ctx, i.source_document_url, 'Expense source document', 'expense_source_document');
+        await assertFreshEvidence(ctx, i.source_document_url, 'expense source document');
+        const m = String(i.source_document_url).match(/^\/api\/files\/([0-9a-f-]{36})$/i)!;
+        await ctx.tx.query(`insert into expense_documents(expense_id,document_type,document_name,uploaded_file_id,uploaded_by) values($1,'SOURCE_DOCUMENT','Expense source document',$2::uuid,$3)`, [e.id, m[1], ctx.actor.id]);
+      }
       await ctx.tx.query(`update expenses set amount=$2, round_no=$3 where id=$1`, [e.id, i.amount, round]);
       await openRound(ctx, 'EXPENSE', e.id, 'EXP_REVIEW', round, OPS_HR_THEN_CEO);
       return `${money(i.amount)}${i.variance_reason ? ` · variance: ${i.variance_reason}` : ''}`;
     },
   },
   {
-    key: 'upload_bank_proof', label: 'Upload bank payment proof',
-    help: 'After paying through the bank, upload the screenshot to the portal. Ops Manager & HR review first, then the CEO.',
-    roles: ['FINANCE_OPERATIONS'], from: ['EXPENSE_APPROVED'], to: 'PAYMENT_PROOF_UPLOADED',
+    key: 'disburse_and_upload_proof', label: 'Disburse cash & upload payment advice',
+    help: 'This expense has full CEO approval. Finance & Accounts can now disburse the cash and upload the payment advice or bank receipt downloaded from the bank. No further approval is required.',
+    roles: ['FINANCE_OPERATIONS', 'ACCOUNTANT'], from: ['FULLY_APPROVED'], to: 'PAID',
     fields: [
-      { name: 'bank_proof_url', label: 'Bank payment screenshot', type: 'file', required: true },
+      { name: 'payment_advice_url', label: 'Payment advice / bank receipt', type: 'file', required: true, uploadPurpose: 'finance_payment_advice' },
       { name: 'bank_reference', label: 'Bank transfer reference', type: 'text', required: true },
+      { name: 'bank_alert_ref', label: 'Bank debit alert reference (optional)', type: 'text' },
     ],
     async apply(ctx, e, i) {
-      await assertFreshEvidence(ctx, i.bank_proof_url, 'bank proof');
-      const round = Number(e.round_no) + 1;
-      await ctx.tx.query(`update expenses set bank_proof_url=$2, bank_reference=$3, round_no=$4 where id=$1`, [e.id, i.bank_proof_url, i.bank_reference, round]);
-      await openRound(ctx, 'EXPENSE', e.id, 'PAY_REVIEW', round, OPS_HR_THEN_CEO);
-      return `Bank ref ${i.bank_reference}`;
+      await assertOwnedUpload(ctx, i.payment_advice_url, 'Payment advice / bank receipt', 'finance_payment_advice');
+      await assertFreshEvidence(ctx, i.payment_advice_url, 'payment advice / bank receipt');
+      const m = String(i.payment_advice_url).match(/^\/api\/files\/([0-9a-f-]{36})$/i)!;
+      await ctx.tx.query(`update expenses set bank_proof_url=$2, bank_reference=$3, bank_alert_ref=$4, paid_at=now() where id=$1`, [e.id, i.payment_advice_url, i.bank_reference, i.bank_alert_ref ?? null]);
+      await ctx.tx.query(`insert into expense_payment_documents(expense_id,document_type,document_name,uploaded_file_id,uploaded_by,bank_reference) values($1,'PAYMENT_ADVICE','Payment advice / bank receipt',$2::uuid,$3,$4)`, [e.id, m[1], ctx.actor.id, i.bank_reference]);
+      const n = { title: 'Expense disbursed & payment advice uploaded', message: `${label(e)} — bank ref ${i.bank_reference}.`, link: link(e) };
+      await notifyRoles(ctx, TEAM, n);
+      await notifyUsers(ctx, [e.submitted_by], n);
+      await notifyRoles(ctx, ['ACCOUNTANT'], { title: 'Generate receipt', message: `${label(e)} — generate the receipt from internet banking.`, link: link(e) });
+      return `Bank ref ${i.bank_reference} · alert ${i.bank_alert_ref}`;
     },
   },
   {
@@ -192,13 +205,22 @@ export async function createDirectExpense(actor: Actor, input: Record<string, un
     { name: 'vendor', label: 'Vendor', type: 'text', required: true },
     { name: 'amount', label: 'Amount (₦)', type: 'number', required: true, min: 1 },
     { name: 'description', label: 'Description', type: 'textarea', required: true },
+    { name: 'source_document_url', label: 'Expense source document', type: 'file', uploadPurpose: 'expense_source_document' },
   ], input);
   return run(actor, async ctx => {
+    if (p.source_document_url) {
+      await assertOwnedUpload(ctx, p.source_document_url, 'Expense source document', 'expense_source_document');
+      await assertFreshEvidence(ctx, p.source_document_url, 'expense source document');
+    }
     const e = (await one(ctx,
       `insert into expenses(sale_id,origin,category,vendor,amount,description,status,round_no,submitted_by)
        values($1,'DIRECT',$2,$3,$4,$5,'EXPENSE_ENTERED',1,$6) returning *`,
       [p.sale_id, p.category, p.vendor, p.amount, p.description, actor.id]))!;
-    await logEvent(ctx, 'EXPENSE', e.id, 'ACCOUNTS', 'Direct expense entered', null, e.status, p.description as string);
+    if (p.source_document_url) {
+      const m = String(p.source_document_url).match(/^\/api\/files\/([0-9a-f-]{36})$/i)!;
+      await ctx.tx.query(`insert into expense_documents(expense_id,document_type,document_name,uploaded_file_id,uploaded_by) values($1,'SOURCE_DOCUMENT','Expense source document',$2::uuid,$3)`, [e.id, m[1], actor.id]);
+    }
+    await logEvent(ctx, 'EXPENSE', e.id, 'ACCOUNTS', 'Direct expense entered', null, e.status, `${p.description}${p.source_document_url ? ' · source document attached' : ''}`);
     await audit(ctx, 'EXPENSE_DIRECT_ENTERED', 'EXPENSE', e.id, {});
     await openRound(ctx, 'EXPENSE', e.id, 'EXP_REVIEW', 1, OPS_HR_THEN_CEO);
     return e.id as string;
@@ -230,9 +252,11 @@ registerRound('NEG_REVIEW', {
 registerRound('EXP_REVIEW', {
   ...common,
   async onComplete(ctx, a) {
-    const e = (await one(ctx, `update expenses set status='EXPENSE_APPROVED', updated_at=now() where id=$1 returning *`, [a.entity_id]))!;
-    await logEvent(ctx, 'EXPENSE', e.id, 'APPROVAL', 'Expense approved', 'EXPENSE_ENTERED', 'EXPENSE_APPROVED', null);
-    await notifyRoles(ctx, ['FINANCE_OPERATIONS'], { title: 'Expense approved – make payment', message: label(e), link: link(e) });
+    const e = (await one(ctx, `update expenses set status='FULLY_APPROVED', updated_at=now() where id=$1 returning *`, [a.entity_id]))!;
+    await logEvent(ctx, 'EXPENSE', e.id, 'APPROVAL', 'Expense fully approved', 'EXPENSE_ENTERED', 'FULLY_APPROVED', null);
+    const n = { title: 'Expense fully approved – Finance & Accounts action required', message: `${label(e)}. Disburse cash and upload the payment evidence.`, link: link(e) };
+    await notifyRoles(ctx, ['FINANCE_OPERATIONS', 'ACCOUNTANT'], n);
+    await notifyUsers(ctx, [e.submitted_by], n);
   },
   async onReject(ctx, a, comment) {
     // A negotiated expense recovers to NEGOTIATION_APPROVED so the Accountant can

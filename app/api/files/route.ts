@@ -16,14 +16,14 @@ export async function POST(req: Request) {
   try { form = await req.formData(); } catch { return NextResponse.json({ error: 'Invalid upload' }, { status: 400 }); }
   const file = form.get('file');
   if (!(file instanceof File)) return NextResponse.json({ error: 'No file provided' }, { status: 400 });
-  const purpose = String(form.get('purpose') ?? 'document');
+  const purpose = String(form.get('purpose') ?? 'document').trim().toLowerCase();
   const allowedTypes = purpose === 'profile' ? PROFILE_IMAGE_TYPES : ALLOWED;
   if (!allowedTypes.has(file.type)) return NextResponse.json({ error: purpose === 'profile' ? 'Profile pictures must be PNG or JPEG' : 'Only PDF, PNG or JPEG files are accepted' }, { status: 400 });
   if (file.size === 0) return NextResponse.json({ error: 'File is empty' }, { status: 400 });
   if (file.size > MAX_BYTES) return NextResponse.json({ error: `File is too large — max ${MAX_BYTES / (1024 * 1024)}MB` }, { status: 400 });
 
   const bytes = Buffer.from(await file.arrayBuffer());
-  const rows = await sql`insert into uploaded_files(filename, mime_type, size_bytes, data, uploaded_by)
-    values(${file.name.slice(0, 200)}, ${file.type}, ${bytes.length}, ${bytes}, ${s.id}::uuid) returning id`;
+  const rows = await sql`insert into uploaded_files(filename, mime_type, size_bytes, data, uploaded_by, purpose)
+    values(${file.name.slice(0, 200)}, ${file.type}, ${bytes.length}, ${bytes}, ${s.id}::uuid, ${purpose}) returning id`;
   return NextResponse.json({ path: `/api/files/${rows[0].id}`, filename: file.name, mimeType: file.type, size: bytes.length });
 }

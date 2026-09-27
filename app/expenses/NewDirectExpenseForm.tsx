@@ -8,5 +8,6 @@ export function NewDirectExpenseForm() {
     { name: 'vendor', label: 'Vendor', type: 'text', required: true },
     { name: 'amount', label: 'Amount (₦)', type: 'number', required: true, min: 1 },
     { name: 'description', label: 'Description', type: 'textarea', required: true },
+    { name: 'source_document_url', label: 'Expense source document (optional)', type: 'file', uploadPurpose: 'expense_source_document' },
   ]} />;
 }

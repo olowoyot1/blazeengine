@@ -2,7 +2,7 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 
-export type UiField = { name: string; label: string; type: string; required?: boolean; options?: string[]; placeholder?: string; min?: number; accept?: string[] };
+export type UiField = { name: string; label: string; type: string; required?: boolean; options?: string[]; placeholder?: string; min?: number; accept?: string[]; uploadPurpose?: string };
 
 const ACCEPT_HINT: Record<string, string> = { 'application/pdf': '.pdf', 'image/png': '.png', 'image/jpeg': '.jpg,.jpeg' };
 
@@ -38,6 +38,7 @@ export function DynamicForm({
     try {
       const body = new FormData();
       body.append('file', file);
+      if (field.uploadPurpose) body.append('purpose', field.uploadPurpose);
       const res = await fetch('/api/files', { method: 'POST', body });
       const data = await res.json();
       if (!res.ok) { setError(data.error || 'Upload failed'); return; }

@@ -82,12 +82,14 @@ export async function getExpense(u: U, id: string) {
     left join sales s on s.id=e.sale_id left join users b on b.id=e.submitted_by
     where e.id=${id}::uuid and (${sc.all}::boolean or e.submitted_by=${sc.uid}::uuid)`;
   if (!rows[0]) return null;
-  const [events, approvals, actionableApproval] = await Promise.all([
+  const [events, approvals, documents, paymentDocuments, actionableApproval] = await Promise.all([
     sql`select e.*, u.name actor, u.role actor_role from workflow_events e left join users u on u.id=e.actor_id where e.entity_type='EXPENSE' and e.entity_id=${id}::uuid order by e.created_at desc`,
     sql`select a.*, u.name acted_by_name from approvals a left join users u on u.id=a.acted_by where a.entity_type='EXPENSE' and a.entity_id=${id}::uuid order by a.round_no, a.seq, a.created_at`,
+    sql`select d.*, u.name uploader from expense_documents d left join users u on u.id=d.uploaded_by where d.expense_id=${id}::uuid order by d.created_at desc`,
+    sql`select d.*, u.name uploader from expense_payment_documents d left join users u on u.id=d.uploaded_by where d.expense_id=${id}::uuid order by d.created_at desc`,
     actionableApprovalForEntity(u, 'EXPENSE', id),
   ]);
-  return { expense: rows[0], events, approvals, actionableApproval };
+  return { expense: rows[0], events, approvals, documents, paymentDocuments, actionableApproval };
 }
 
 // ---------------------------------------------------------------- Approvals

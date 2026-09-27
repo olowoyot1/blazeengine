@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS uploaded_files(
   size_bytes int NOT NULL,
   data bytea NOT NULL,
   uploaded_by uuid REFERENCES users(id),
+  purpose text NOT NULL DEFAULT 'document',
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -86,7 +87,7 @@ CREATE TABLE IF NOT EXISTS sales(
   amount numeric(14,2) NOT NULL DEFAULT 0,
   quoted_amount numeric(14,2),
   description text,
-  status text NOT NULL DEFAULT 'DRAFT',
+  status text NOT NULL DEFAULT 'PENDING_SALES_APPROVAL',
   payment_status text NOT NULL DEFAULT 'UNPAID',
   payment_reference text,
   invoice_number text,
@@ -358,3 +359,31 @@ CREATE TABLE IF NOT EXISTS payroll_documents(
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), payroll_run_id uuid NOT NULL REFERENCES payroll_runs(id) ON DELETE CASCADE, document_type text NOT NULL,
   document_name text NOT NULL, uploaded_file_id uuid REFERENCES uploaded_files(id) ON DELETE SET NULL, uploaded_by uuid REFERENCES users(id), created_at timestamptz NOT NULL DEFAULT now());
 CREATE INDEX IF NOT EXISTS idx_payroll_docs_run ON payroll_documents(payroll_run_id);
+
+
+-- v3.8: keep Finance payment advice/bank receipts separate from expense source documents.
+CREATE TABLE IF NOT EXISTS expense_payment_documents(
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  expense_id uuid NOT NULL REFERENCES expenses(id) ON DELETE CASCADE,
+  document_type text NOT NULL DEFAULT 'PAYMENT_ADVICE',
+  document_name text NOT NULL,
+  uploaded_file_id uuid REFERENCES uploaded_files(id) ON DELETE SET NULL,
+  uploaded_by uuid REFERENCES users(id),
+  bank_reference text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_expense_payment_docs_expense ON expense_payment_documents(expense_id, created_at);
+ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS purpose text NOT NULL DEFAULT 'document';
+
+-- v3.7: expense supporting documents. Evidence belongs to expense operations,
+-- not to the Sales supporting-documents panel.
+CREATE TABLE IF NOT EXISTS expense_documents(
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  expense_id uuid NOT NULL REFERENCES expenses(id) ON DELETE CASCADE,
+  document_type text NOT NULL DEFAULT 'SUPPORTING_DOCUMENT',
+  document_name text NOT NULL,
+  uploaded_file_id uuid REFERENCES uploaded_files(id) ON DELETE SET NULL,
+  uploaded_by uuid REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_expense_docs_expense ON expense_documents(expense_id, created_at);

@@ -25,7 +25,7 @@ export function ClientProfileForm({ clientId, client }: { clientId: string; clie
     start(async () => {
       const res = await saveClientProfile(clientId, v);
       if ('error' in res) setError(res.error);
-      else { setOk(true); router.refresh(); }
+      else { router.push('/clients'); }
     });
   }
 

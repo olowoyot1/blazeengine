@@ -1,6 +1,7 @@
 /**
  * SALE LIFECYCLE  (rows 1–12 of the process sheet)
  *
+ *  PENDING_SALES_APPROVAL ──approve_new_sale──▶ DRAFT
  *  DRAFT ──submit_payment_proof──▶ PAYMENT_PROOF_SUBMITTED        Sales team uploads payment proof
  *  ──enter_invoice──▶ INVOICE_ENTERED                             Accountant enters invoice → back to Sales Mgr + Sales Exec
  *  ──approve_sale──▶ SALES_APPROVED                               Sales Manager approves → Operations receives approved sale
@@ -18,7 +19,7 @@
 import type { Role } from '../constants';
 import { ALLOCATION_WINDOW_DAYS, SALE_STATUS_LABEL } from '../constants';
 import {
-  ForbiddenError, WorkflowError, assertFreshEvidence, audit, d10, logEvent, mailClient, many, money, notifyRoles, notifyUsers, one,
+  ForbiddenError, WorkflowError, assertFreshEvidence, assertOwnedUpload, audit, d10, logEvent, mailClient, many, money, notifyRoles, notifyUsers, one,
   parseFields, run, type Actor, type Ctx, type Field, type Parsed,
 } from './core';
 import type { Row } from '../db';
@@ -40,9 +41,11 @@ export type SaleAction = {
 
 async function addDoc(ctx: Ctx, saleId: string, type: string, url: unknown, name?: string) {
   if (!url) return;
+  const value = String(url);
+  const m = value.match(/^\/api\/files\/([0-9a-f-]{36})$/i);
   await ctx.tx.query(
-    `insert into sale_documents(sale_id,document_type,document_name,document_url,uploaded_by) values($1,$2,$3,$4,$5)`,
-    [saleId, type, name ?? type.replace(/_/g, ' ').toLowerCase(), String(url), ctx.actor.id]);
+    `insert into sale_documents(sale_id,document_type,document_name,document_url,uploaded_file_id,uploaded_by) values($1,$2,$3,$4,$5::uuid,$6)`,
+    [saleId, type, name ?? type.replace(/_/g, ' ').toLowerCase(), value, m ? m[1] : null, ctx.actor.id]);
 }
 async function siteRecord(ctx: Ctx, saleId: string, type: string, details: object) {
   await ctx.tx.query(`insert into site_records(sale_id,record_type,details,created_by) values($1,$2,$3,$4)`,
@@ -72,15 +75,31 @@ const reason: Field = { name: 'reason', label: 'Reason', type: 'textarea', requi
 
 export const SALE_ACTIONS: SaleAction[] = [
   {
+    key: 'approve_new_sale', label: 'Approve new sale',
+    help: 'Sales Manager reviews the newly created sale. Payment processing cannot start until this approval is completed.',
+    roles: ['SALES_MANAGER'], from: ['PENDING_SALES_APPROVAL'], to: 'DRAFT',
+    fields: [{ name: 'note', label: 'Approval note (optional)', type: 'textarea' }],
+    async apply(ctx, s, i) {
+      await ctx.tx.query(`update sales set gate_approved_by=$2 where id=$1`, [s.id, ctx.actor.id]);
+      const hasProof = s.payment_status === 'PROOF_SUBMITTED';
+      const n = hasProof
+        ? { title: 'Sale approved – payment proof ready for Accounts', message: `${saleLabel(s)} has been approved by the Sales Manager. Accounts can now verify the uploaded payment evidence and enter the invoice.`, link: saleLink(s) }
+        : { title: 'Sale approved – payment can proceed', message: `${saleLabel(s)} has been approved by the Sales Manager. Upload payment proof when the client pays.`, link: saleLink(s) };
+      await notifyUsers(ctx, [s.created_by], n);
+      if (hasProof) await notifyRoles(ctx, ['ACCOUNTANT'], n);
+      return i.note ? String(i.note) : 'New sale approved';
+    },
+  },
+  {
     key: 'submit_payment_proof', label: 'Upload payment proof', ownOnly: true,
     help: 'Client has paid. Attach the payment proof link and reference – Accounts is notified.',
     roles: ['SALES', 'SALES_MANAGER'], from: ['DRAFT'], to: 'PAYMENT_PROOF_SUBMITTED',
     fields: [
-      { name: 'proof_url', label: 'Payment proof', type: 'file', required: true },
+      { name: 'proof_url', label: 'Payment proof', type: 'file', required: true, uploadPurpose: 'sales_payment_evidence' },
       { name: 'payment_reference', label: 'Payment reference', type: 'text', required: true },
-      { name: 'amount_paid', label: 'Amount paid (₦)', type: 'number', min: 1 },
-    ],
+      ],
     async apply(ctx, s, i) {
+      await assertOwnedUpload(ctx, i.proof_url, 'Payment proof', 'sales_payment_evidence');
       await assertFreshEvidence(ctx, i.proof_url, 'payment proof');
       await addDoc(ctx, s.id, 'PAYMENT_PROOF', i.proof_url, 'Payment proof');
       await ctx.tx.query(`update sales set payment_status='PROOF_SUBMITTED', payment_reference=$2 where id=$1`, [s.id, i.payment_reference]);
@@ -309,7 +328,7 @@ export const SALE_ACTIONS: SaleAction[] = [
     key: 'cancel_sale', label: 'Cancel sale', danger: true,
     help: 'Cancels the sale and closes open approvals. Not possible once pre-allocation has started.',
     roles: ['SALES_MANAGER', 'CEO'],
-    from: ['DRAFT', 'PAYMENT_PROOF_SUBMITTED', 'INVOICE_ENTERED', 'SALES_APPROVED', 'CONTRACT_PREPARED', 'ACCOUNT_DOCS_SENT', 'SITE_NOTIFIED', 'OPS_DOCS_UPLOADED', 'IN_APPROVAL', 'RETURNED', 'FULLY_APPROVED'],
+    from: ['PENDING_SALES_APPROVAL', 'DRAFT', 'PAYMENT_PROOF_SUBMITTED', 'INVOICE_ENTERED', 'SALES_APPROVED', 'CONTRACT_PREPARED', 'ACCOUNT_DOCS_SENT', 'SITE_NOTIFIED', 'OPS_DOCS_UPLOADED', 'IN_APPROVAL', 'RETURNED', 'FULLY_APPROVED'],
     to: 'CANCELLED', fields: [reason],
     async apply(ctx, s, i) {
       await cancelPending(ctx, 'SALE', s.id);
@@ -341,13 +360,15 @@ export async function performSaleAction(actor: Actor, saleId: string, key: strin
     if (!s) throw new WorkflowError('Sale not found');
     if (!a.from.includes(s.status)) throw new WorkflowError(`Not available while the sale is "${SALE_STATUS_LABEL[s.status] ?? s.status}"`);
     if (a.ownOnly && actor.role === 'SALES' && s.created_by !== actor.id) throw new ForbiddenError('You can only act on sales you created');
+    if (a.key === 'approve_new_sale' && s.created_by === actor.id) throw new ForbiddenError('A Sales Manager cannot approve their own sale');
     const parsed = parseFields(a.fields, input);
     const notes = (await a.apply(ctx, s, parsed)) || null;
-    if (a.to) await ctx.tx.query(`update sales set status=$2, updated_at=now() where id=$1`, [s.id, a.to]);
+    const nextStatus = a.key === 'approve_new_sale' && s.payment_status === 'PROOF_SUBMITTED' ? 'PAYMENT_PROOF_SUBMITTED' : (a.to ?? s.status);
+    if (a.to) await ctx.tx.query(`update sales set status=$2, updated_at=now() where id=$1`, [s.id, nextStatus]);
     else await ctx.tx.query(`update sales set updated_at=now() where id=$1`, [s.id]);
-    await logEvent(ctx, 'SALE', s.id, stageOf(a), a.label, s.status, a.to ?? s.status, notes);
-    await audit(ctx, `SALE_${a.key.toUpperCase()}`, 'SALE', s.id, { from: s.status, to: a.to ?? s.status });
-    return { status: a.to ?? s.status };
+    await logEvent(ctx, 'SALE', s.id, stageOf(a), a.label, s.status, nextStatus, notes);
+    await audit(ctx, `SALE_${a.key.toUpperCase()}`, 'SALE', s.id, { from: s.status, to: nextStatus });
+    return { status: nextStatus };
   });
 }
 const stageOf = (a: SaleAction) => a.roles.includes('SITE_MANAGER') ? 'SITE_MANAGEMENT' : a.roles.includes('ACCOUNTANT') ? 'ACCOUNTS' : a.roles.includes('OPERATIONS') ? 'OPERATIONS' : 'SALES';
@@ -360,7 +381,10 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
     { name: 'plot_reference', label: 'Plot reference', type: 'text', required: true },
     { name: 'amount', label: 'Sale amount (₦)', type: 'number', required: true, min: 1 },
     { name: 'description', label: 'Description', type: 'textarea' },
+    { name: 'payment_proof_url', label: 'Payment evidence', type: 'file', uploadPurpose: 'sales_payment_evidence' },
+    { name: 'payment_reference', label: 'Payment reference', type: 'text' },
   ], input);
+  if (p.payment_proof_url && !p.payment_reference) throw new WorkflowError('Payment reference is required when payment evidence is uploaded');
   return run(actor, async ctx => {
     const client = await one(ctx, `select * from clients where id=$1`, [p.client_id]);
     if (!client) throw new WorkflowError('Client not found');
@@ -368,12 +392,22 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
       `select id from sales where lower(property_name)=lower($1) and lower(plot_reference)=lower($2) and status<>'CANCELLED' limit 1`,
       [p.property_name, p.plot_reference]);
     if (taken) throw new WorkflowError('This plot is already attached to another active sale (double-sale prevention)');
+    if (p.payment_proof_url) {
+      await assertOwnedUpload(ctx, p.payment_proof_url, 'Payment evidence', 'sales_payment_evidence');
+      await assertFreshEvidence(ctx, p.payment_proof_url, 'payment evidence');
+    }
+    const paymentStatus = p.payment_proof_url ? 'PROOF_SUBMITTED' : 'UNPAID';
     const s = (await one(ctx,
-      `insert into sales(client_id,lead_id,client_name,client_email,property_name,plot_reference,amount,quoted_amount,description,created_by)
-       values($1,(select id from leads where client_id=$1 limit 1),$2,$3,$4,$5,$6,$6,$7,$8) returning id`,
-      [client.id, client.name, client.email, p.property_name, p.plot_reference, p.amount, p.description, actor.id]))!;
-    await logEvent(ctx, 'SALE', s.id, 'SALES', 'Sale created', null, 'DRAFT', `${p.property_name} / ${p.plot_reference} · ${money(p.amount)}`);
-    await audit(ctx, 'SALE_CREATED', 'SALE', s.id, { client: client.name });
+      `insert into sales(client_id,lead_id,client_name,client_email,property_name,plot_reference,amount,quoted_amount,description,status,payment_status,payment_reference,created_by)
+       values($1,(select id from leads where client_id=$1 limit 1),$2,$3,$4,$5,$6,$6,$7,'PENDING_SALES_APPROVAL',$8,$9,$10) returning id`,
+      [client.id, client.name, client.email, p.property_name, p.plot_reference, p.amount, p.description, paymentStatus, p.payment_reference ?? null, actor.id]))!;
+    if (p.payment_proof_url) {
+      const m = String(p.payment_proof_url).match(/^\/api\/files\/([0-9a-f-]{36})$/i)!;
+      await ctx.tx.query(`insert into sale_documents(sale_id,document_type,document_name,document_url,uploaded_file_id,uploaded_by) values($1,'PAYMENT_PROOF','Payment evidence',$2,$3::uuid,$4)`, [s.id, p.payment_proof_url, m[1], actor.id]);
+    }
+    await logEvent(ctx, 'SALE', s.id, 'SALES', 'Sale created', null, 'PENDING_SALES_APPROVAL', `${p.property_name} / ${p.plot_reference} · ${money(p.amount)}${p.payment_proof_url ? ' · payment evidence attached' : ''}`);
+    await audit(ctx, 'SALE_CREATED', 'SALE', s.id, { client: client.name, payment_evidence_attached: !!p.payment_proof_url });
+    await notifyRoles(ctx, ['SALES_MANAGER'], { title: 'New sale awaiting approval', message: `${client.name} — ${p.property_name} / ${p.plot_reference} · ${money(p.amount)}. Review the sale and any attached payment evidence before approval.`, link: saleLink(s.id) });
     return s.id as string;
   });
 }

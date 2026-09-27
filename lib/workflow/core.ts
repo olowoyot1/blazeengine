@@ -83,6 +83,8 @@ export type Field = {
   required?: boolean; options?: string[]; placeholder?: string; min?: number;
   /** file only: which MIME types the upload endpoint accepts, for the picker's hint. */
   accept?: string[];
+  /** file only: purpose written to uploaded_files for evidence separation. */
+  uploadPurpose?: string;
 };
 export type Parsed = Record<string, string | number | boolean | null>;
 
@@ -146,11 +148,23 @@ export { d10 } from '../format';
  * that has already been used as evidence elsewhere in the system, catching the
  * simplest form of reuse/fabrication. It cannot verify the link's actual content.
  */
+export async function assertOwnedUpload(ctx: Ctx, url: unknown, label: string, expectedPurpose?: string) {
+  if (!url) return;
+  const m = String(url).match(/^\/api\/files\/([0-9a-f-]{36})$/i);
+  if (!m) throw new WorkflowError(`${label}: please upload a valid file`);
+  const f = await one(ctx, `select id, uploaded_by, purpose from uploaded_files where id=$1::uuid`, [m[1]]);
+  if (!f) throw new WorkflowError(`${label}: uploaded file not found`);
+  if (f.uploaded_by !== ctx.actor.id) throw new ForbiddenError(`${label}: you can only use a file you uploaded`);
+  if (expectedPurpose && f.purpose !== expectedPurpose) throw new WorkflowError(`${label}: upload the document in the correct evidence field`);
+}
+
 export async function assertFreshEvidence(ctx: Ctx, url: unknown, label: string) {
   if (!url) return;
   const dup = await one(ctx, `
     select 1 from sale_documents where document_url=$1
     union all select 1 from expenses where bank_proof_url=$1 or receipt_url=$1 or negotiation_url=$1
+    union all select 1 from expense_documents where '/api/files/' || uploaded_file_id::text=$1
+    union all select 1 from expense_payment_documents where '/api/files/' || uploaded_file_id::text=$1
     limit 1`, [String(url)]);
-  if (dup) throw new WorkflowError(`This ${label} link has already been used as evidence elsewhere — each proof must be unique`);
+  if (dup) throw new WorkflowError(`This ${label} file has already been used as evidence elsewhere — each proof must be unique`);
 }
