@@ -341,8 +341,8 @@ export async function createPayrollRun(input: { payrollMonth: string; periodStar
   try {
     const existing = await sql`select id from payroll_runs where payroll_month=${input.payrollMonth.trim()}`;
     if (existing.length) return { error: 'A payroll run already exists for this month.' };
-    const runRows = await sql`insert into payroll_runs(payroll_month,period_start,period_end,notes,created_by)
-      values(${input.payrollMonth.trim()},${input.periodStart},${input.periodEnd},${input.notes||null},${s.id}::uuid) returning id`;
+    const runRows = await sql`insert into payroll_runs(transaction_reference,payroll_month,period_start,period_end,notes,created_by)
+      values('TXN-PAY-' || lpad(nextval('transaction_reference_seq')::text, 8, '0'),${input.payrollMonth.trim()},${input.periodStart},${input.periodEnd},${input.notes||null},${s.id}::uuid) returning id`;
     const runId = runRows[0].id;
     await sql`insert into payroll_items(payroll_run_id,employee_id,base_salary,allowances,deductions,gross_salary,net_salary)
       select ${runId}::uuid,e.id,coalesce(e.base_salary,0),0,0,coalesce(e.base_salary,0),coalesce(e.base_salary,0)

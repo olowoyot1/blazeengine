@@ -23,7 +23,7 @@ export default async function ExpenseDetail({ params }: { params: Promise<{ id: 
     <Shell s={s} title={`${e.vendor || 'Expense'} — ${e.category}`} kicker="Expense">
       <div className="grid2">
         <div className="card">
-          <div className="section-title"><h3>Overview</h3><Badge status={e.status} label={EXPENSE_STATUS_LABEL[e.status] ?? human(e.status)} /></div>
+          <div className="section-title"><h3>Overview</h3><div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><span className="badge">{e.transaction_reference || 'Reference pending'}</span><Badge status={e.status} label={EXPENSE_STATUS_LABEL[e.status] ?? human(e.status)} /></div></div>
           <table className="table"><tbody>
             <tr><td className="muted">Origin</td><td>{human(e.origin)}</td></tr>
             <tr><td className="muted">Vendor / Category</td><td>{e.vendor || '—'} / {e.category}</td></tr>
