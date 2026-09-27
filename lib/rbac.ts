@@ -20,7 +20,7 @@ export const CAPS: Record<Role, Cap[]> = {
 export const ADMIN_TIER_ROLES: Role[] = ['ADMIN','SUPER_ADMIN'];
 export function can(role: Role | string | undefined, cap: Cap): boolean { return !!role && (role === 'SUPER_ADMIN' || ((CAPS as Record<string,Cap[]>)[role]?.includes(cap) === true)); }
 export function canAny(role: Role | string | undefined, caps: Cap[]): boolean { return caps.length === 0 || caps.some(c=>can(role,c)); }
-export function saleScope(user:{id:string;role:Role}) { const r=user.role; const all=can(r,'sale.read_all'); const own=r==='SALES'; let statuses:string[]=[]; if(r==='ACCOUNTANT') statuses=SALE_STATUS_ORDER.filter(s=>s!=='DRAFT'); if(r==='OPERATIONS'||r==='OPERATIONS_MANAGER') statuses=statusesFrom('SALES_APPROVED'); if(r==='SITE_MANAGER') statuses=statusesFrom('SITE_NOTIFIED'); return {all,own,uid:user.id,statuses}; }
+export function saleScope(user:{id:string;role:Role}) { const r=user.role; const all=can(r,'sale.read_all'); const own=r==='SALES'; let statuses:string[]=[]; if(r==='ACCOUNTANT') statuses=['DRAFT', ...SALE_STATUS_ORDER.filter(s=>s!=='DRAFT')]; if(r==='OPERATIONS'||r==='OPERATIONS_MANAGER') statuses=statusesFrom('SALES_APPROVED'); if(r==='SITE_MANAGER') statuses=statusesFrom('SITE_NOTIFIED'); return {all,own,uid:user.id,statuses}; }
 function statusesFrom(start:string){const i=SALE_STATUS_ORDER.indexOf(start);return SALE_STATUS_ORDER.filter((s,idx)=>(idx>=i&&s!=='CANCELLED')||s==='RETURNED');}
 export function expenseScope(user:{id:string;role:Role}){return {all:can(user.role,'expense.read_all'),uid:user.id};}
 export type NavItem={href:string;label:string;cap:Cap[];mode:'view'|'action'|'both'};
