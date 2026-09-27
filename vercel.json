@@ -5,7 +5,7 @@
   "installCommand": "npm ci --no-audit --no-fund",
   "functions": {
     "app/api/**/*.ts": {
-      "maxDuration": 300
+      "maxDuration": 60
     }
   }
 }
