@@ -67,6 +67,23 @@ export async function newDirectExpense(input: Record<string, unknown>): Promise<
   try { const id = await createDirectExpense(s, input); revalidatePath('/expenses'); revalidatePath('/notifications'); return { ok: true, id }; }
   catch (e) { return toErr(e); }
 }
+export async function attachSaleDocument(saleId: string, documentType: string, documentName: string, filePath: string): Promise<Result> {
+  const s = await requireCap('sale.read', 'sale.read_all');
+  try {
+    if (!/^[0-9a-f-]{36}$/i.test(saleId)) return { error: 'Invalid sale' };
+    const m = filePath.match(/^\/api\/files\/([0-9a-f-]{36})$/i);
+    if (!m) return { error: 'Invalid document upload' };
+    const f = await sql`select id from uploaded_files where id=${m[1]}::uuid and uploaded_by=${s.id}::uuid`;
+    if (!f.length) return { error: 'You can only attach files you uploaded.' };
+    const sale = await sql`select id from sales where id=${saleId}::uuid`;
+    if (!sale.length) return { error: 'Sale not found' };
+    await sql`insert into sale_documents(sale_id,document_type,document_name,uploaded_file_id,uploaded_by)
+      values(${saleId}::uuid,${documentType.trim() || 'SUPPORTING_DOCUMENT'},${documentName.trim().slice(0,200)},${m[1]}::uuid,${s.id}::uuid)`;
+    revalidatePath(`/sales/${saleId}`); revalidatePath('/sales');
+    return { ok: true };
+  } catch (e) { return toErr(e); }
+}
+
 export async function attachExpenseDocument(expenseId: string, documentType: string, documentName: string, filePath: string): Promise<Result> {
   const s = await requireCap('expense.read', 'expense.read_all', 'finance.workspace');
   try {

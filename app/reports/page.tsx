@@ -1,8 +1,6 @@
 export const dynamic = 'force-dynamic';
 
 import Shell from '@/components/Shell';
-// ... rest of your existing app/reports/page.tsx code
-import Shell from '@/components/Shell';
 import { requireCap } from '@/lib/guard';
 import { can } from '@/lib/rbac';
 import { marketerReport, salesReport, hrReport, opsReport, siteReport, financeReport, companyStats, myActivity, staffPerformance, companyPerformance } from '@/lib/queries';
