@@ -7,8 +7,22 @@ export const pool = new Pool({
   ssl: process.env.NODE_ENV === 'production' && connectionString ? { rejectUnauthorized: false } : false,
 });
 
+let schemaReady: Promise<void> | null = null;
+
+async function ensureApprovalSchema() {
+  if (!connectionString) return;
+  if (!schemaReady) {
+    schemaReady = pool.query(`ALTER TABLE approvals ADD COLUMN IF NOT EXISTS approver_user_id uuid REFERENCES users(id)`).then(() => undefined).catch((error) => {
+      schemaReady = null;
+      throw error;
+    });
+  }
+  await schemaReady;
+}
+
 export async function query(text: string, params?: unknown[]) {
   if (!connectionString) return { rows: [] };
+  await ensureApprovalSchema();
   return pool.query(text, params);
 }
 
@@ -28,6 +42,7 @@ export type Tx = { query: (text: string, params?: unknown[]) => Promise<{ rows: 
 
 export async function withTx<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
   if (!connectionString) return fn({ query: async () => ({ rows: [] }) });
+  await ensureApprovalSchema();
   const client = await pool.connect();
   try {
     await client.query('begin');
