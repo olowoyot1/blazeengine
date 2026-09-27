@@ -82,6 +82,7 @@ CREATE SEQUENCE IF NOT EXISTS transaction_reference_seq;
 CREATE TABLE IF NOT EXISTS sales(
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   sale_reference text,
+  transaction_type text NOT NULL DEFAULT 'INITIAL_DEPOSIT',
   client_id uuid REFERENCES clients(id),
   lead_id uuid REFERENCES leads(id),
   client_name text NOT NULL,
@@ -115,6 +116,7 @@ CREATE TABLE IF NOT EXISTS sales(
 );
 
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS sale_reference text;
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS transaction_type text NOT NULL DEFAULT 'INITIAL_DEPOSIT';
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS transaction_reference text;
 ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS transaction_reference text;
 UPDATE sales SET sale_reference = 'SALE-' || to_char(created_at, 'YYYYMM') || '-' || upper(substr(replace(id::text, '-', ''), 1, 8)) WHERE sale_reference IS NULL;

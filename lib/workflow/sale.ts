@@ -116,7 +116,7 @@ export const SALE_ACTIONS: SaleAction[] = [
       await assertFreshEvidence(ctx, i.proof_url, 'payment proof');
       await addDoc(ctx, s.id, 'PAYMENT_PROOF', i.proof_url, 'Payment proof');
       await ctx.tx.query(`update sales set payment_status='PROOF_SUBMITTED', payment_reference=$2 where id=$1`, [s.id, i.payment_reference]);
-      await notifyRoles(ctx, ['SALES_MANAGER'], { title: 'Payment proof awaiting approval', message: `${saleLabel(s)} — reference ${i.payment_reference}. Approve or cancel this sale.`, link: saleLink(s) });
+      await notifyRoles(ctx, ['SALES_MANAGER'], { title: 'Payment proof awaiting approval', message: `${saleLabel(s)} �� reference ${i.payment_reference}. Approve or cancel this sale.`, link: saleLink(s) });
       await notifyRoles(ctx, ['ACCOUNTANT', 'FINANCE_OPERATIONS'], { title: 'Payment proof submitted', message: `${saleLabel(s)} is awaiting Sales Manager approval before Accounts processing.`, link: saleLink(s) });
       return `Payment ref ${i.payment_reference}${i.amount_paid ? ` (${money(i.amount_paid)})` : ''}`;
     },
@@ -187,6 +187,18 @@ export const SALE_ACTIONS: SaleAction[] = [
     },
   },
   {
+    key: 'skip_topup_documents', label: 'Record top-up — no sale documents',
+    help: 'Top-up transactions do not require a Contract of Sale, Letter of Acknowledgment or Sales Documents bundle.',
+    roles: OPS, from: ['SALES_APPROVED'], to: 'SITE_NOTIFIED',
+    fields: [{ name: 'note', label: 'Note (optional)', type: 'textarea' }],
+    async apply(ctx, s, i) {
+      if (s.transaction_type !== 'TOP_UP') throw new WorkflowError('This shortcut is only available for top-up transactions');
+      await ctx.tx.query(`update sales set ops_due_date = current_date + ${ALLOCATION_WINDOW_DAYS} where id=$1`, [s.id]);
+      await openTask(ctx, s.id, 'ALLOCATION_DOCS', ALLOCATION_WINDOW_DAYS, 'Deed of assignment + survey plan');
+      await notifyRoles(ctx, ['SITE_MANAGER'], { title: 'Top-up ready for allocation', message: `${saleLabel(s)}. No sale documents are required for this top-up.${i.note ? ` ${i.note}` : ''}`, link: saleLink(s) });
+    },
+  },
+  {
     key: 'create_contract', label: 'Create sale documents',
     help: 'Operations prepares the Contract of Sale, Letter of Acknowledgment and Sales Documents bundle. On submission the sale goes back to Accounts.',
     roles: OPS, from: ['SALES_APPROVED'], to: 'CONTRACT_PREPARED',
@@ -196,6 +208,7 @@ export const SALE_ACTIONS: SaleAction[] = [
       { name: 'sales_documents_url', label: 'Sales Documents bundle', type: 'file', required: true },
     ],
     async apply(ctx, s, i) {
+      if (s.transaction_type === 'TOP_UP') throw new WorkflowError('Top-up transactions do not receive sale documents');
       await addDoc(ctx, s.id, 'CONTRACT', i.contract_url, 'Contract of Sale');
       await addDoc(ctx, s.id, 'ACKNOWLEDGMENT_LETTER', i.acknowledgment_url, 'Letter of Acknowledgment');
       await addDoc(ctx, s.id, 'SALES_DOCUMENTS', i.sales_documents_url, 'Sales Documents bundle');
@@ -394,10 +407,11 @@ const BY_KEY = new Map(SALE_ACTIONS.map(a => [a.key, a]));
 export const getSaleAction = (k: string) => BY_KEY.get(k);
 
 /** Actions this user may perform right now on this sale (drives the UI and the queue). */
-export function availableSaleActions(sale: { status: string; created_by?: string | null }, user: { id: string; role: Role }) {
+export function availableSaleActions(sale: { status: string; created_by?: string | null; transaction_type?: string | null }, user: { id: string; role: Role }) {
   return SALE_ACTIONS.filter(a =>
-    (user.role === 'SUPER_ADMIN' || a.roles.includes(user.role)) && a.from.includes(sale.status) &&
-    !(a.ownOnly && user.role === 'SALES' && sale.created_by !== user.id));
+  (user.role === 'SUPER_ADMIN' || a.roles.includes(user.role)) && a.from.includes(sale.status) &&
+  (sale.transaction_type !== 'TOP_UP' || a.key === 'skip_topup_documents' || a.key === 'open_ops_portal') &&
+  !(a.ownOnly && user.role === 'SALES' && sale.created_by !== user.id));
 }
 
 export async function performSaleAction(actor: Actor, saleId: string, key: string, input: Record<string, unknown>) {
@@ -456,6 +470,7 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
 { name: 'estate_value', label: 'Estate value (₦)', type: 'number', required: true, min: 1 },
   { name: 'payment_amount', label: 'Payment amount (₦)', type: 'number', required: true, min: 1 },
   { name: 'payment_plan', label: 'Payment plan', type: 'text', required: true },
+  { name: 'transaction_type', label: 'Transaction type', type: 'select', required: true, options: ['INITIAL_DEPOSIT', 'TOP_UP'] },
   { name: 'description', label: 'Description', type: 'textarea' },
     { name: 'payment_proof_url', label: 'Payment evidence', type: 'file', uploadPurpose: 'sales_payment_evidence' },
     { name: 'payment_reference', label: 'Payment reference', type: 'text' },
@@ -474,9 +489,9 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
     }
     const paymentStatus = p.payment_proof_url ? 'PROOF_SUBMITTED' : 'UNPAID';
     const s = (await one(ctx,
-`insert into sales(sale_reference,client_id,lead_id,client_name,client_email,property_name,plot_reference,amount,estate_value,payment_amount,quoted_amount,payment_plan,description,status,payment_status,payment_reference,created_by)
-  values('SALE-' || to_char(now(), 'YYYYMM') || '-' || lpad(nextval('sale_reference_seq')::text, 6, '0'), $1,(select id from leads where client_id=$1 limit 1),$2,$3,$4,$5,$6,$7,$8,$7,$9,$10,'DRAFT',$11,$12,$13) returning id, sale_reference`,
-  [client.id, client.name, client.email, p.property_name, p.plot_reference, p.estate_value, p.estate_value, p.payment_amount, p.payment_plan, p.description, paymentStatus, p.payment_reference ?? null, actor.id]))!;
+`insert into sales(sale_reference,transaction_type,client_id,lead_id,client_name,client_email,property_name,plot_reference,amount,estate_value,payment_amount,quoted_amount,payment_plan,description,status,payment_status,payment_reference,created_by)
+  values('SALE-' || to_char(now(), 'YYYYMM') || '-' || lpad(nextval('sale_reference_seq')::text, 6, '0'), $1, $2,(select id from leads where client_id=$2 limit 1),$3,$4,$5,$6,$7,$8,$9,$7,$10,$11,'DRAFT',$12,$13,$14) returning id, sale_reference`,
+  [p.transaction_type, client.id, client.name, client.email, p.property_name, p.plot_reference, p.estate_value, p.estate_value, p.payment_amount, p.payment_plan, p.description, paymentStatus, p.payment_reference ?? null, actor.id]))!;
     if (p.payment_proof_url) {
       const m = String(p.payment_proof_url).match(/^\/api\/files\/([0-9a-f-]{36})$/i)!;
       await ctx.tx.query(`insert into sale_documents(sale_id,document_type,document_name,document_url,uploaded_file_id,uploaded_by) values($1,'PAYMENT_PROOF','Payment evidence',$2,$3::uuid,$4)`, [s.id, p.payment_proof_url, m[1], actor.id]);
