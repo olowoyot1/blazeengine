@@ -1,6 +1,6 @@
 import { Pool } from 'pg';
 
-const connectionString = process.env.DATABASE_URL;
+const connectionString = process.env.DATABASE_URL || process.env.DATABASE_URL_3;
 
 export const pool = new Pool({
   connectionString: connectionString || 'postgres://placeholder:placeholder@localhost:5432/placeholder',
@@ -8,7 +8,7 @@ export const pool = new Pool({
 });
 
 export async function query(text: string, params?: unknown[]) {
-  if (!process.env.DATABASE_URL) return { rows: [] };
+  if (!connectionString) return { rows: [] };
   return pool.query(text, params);
 }
 
@@ -27,7 +27,7 @@ export type Row = Record<string, any>;
 export type Tx = { query: (text: string, params?: unknown[]) => Promise<{ rows: Row[] }> };
 
 export async function withTx<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
-  if (!process.env.DATABASE_URL) return fn({ query: async () => ({ rows: [] }) });
+  if (!connectionString) return fn({ query: async () => ({ rows: [] }) });
   const client = await pool.connect();
   try {
     await client.query('begin');
