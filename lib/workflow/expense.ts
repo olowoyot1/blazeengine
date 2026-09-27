@@ -185,8 +185,8 @@ export async function createNegotiation(actor: Actor, input: Record<string, unkn
       if (!s) throw new WorkflowError('Related sale not found');
     }
     const e = (await one(ctx,
-      `insert into expenses(sale_id,origin,category,vendor,negotiated_amount,negotiation_notes,negotiation_url,status,submitted_by)
-       values($1,'NEGOTIATION',$2,$3,$4,$5,$6,'NEGOTIATION_SUBMITTED',$7) returning *`,
+      `insert into expenses(transaction_reference,sale_id,origin,category,vendor,negotiated_amount,negotiation_notes,negotiation_url,status,submitted_by)
+       values('TXN-EXP-' || lpad(nextval('transaction_reference_seq')::text, 8, '0'),$1,'NEGOTIATION',$2,$3,$4,$5,$6,'NEGOTIATION_SUBMITTED',$7) returning *`,
       [p.sale_id, p.category, p.vendor, p.negotiated_amount, p.negotiation_notes, p.negotiation_url, actor.id]))!;
     await logEvent(ctx, 'EXPENSE', e.id, 'SITE_MANAGEMENT', 'Vendor negotiation uploaded', null, e.status, p.negotiation_notes as string);
     await audit(ctx, 'NEGOTIATION_SUBMITTED', 'EXPENSE', e.id, { vendor: p.vendor });
@@ -213,8 +213,8 @@ export async function createDirectExpense(actor: Actor, input: Record<string, un
       await assertFreshEvidence(ctx, p.source_document_url, 'expense source document');
     }
     const e = (await one(ctx,
-      `insert into expenses(sale_id,origin,category,vendor,amount,description,status,round_no,submitted_by)
-       values($1,'DIRECT',$2,$3,$4,$5,'EXPENSE_ENTERED',1,$6) returning *`,
+      `insert into expenses(transaction_reference,sale_id,origin,category,vendor,amount,description,status,round_no,submitted_by)
+       values('TXN-EXP-' || lpad(nextval('transaction_reference_seq')::text, 8, '0'),$1,'DIRECT',$2,$3,$4,$5,'EXPENSE_ENTERED',1,$6) returning *`,
       [p.sale_id, p.category, p.vendor, p.amount, p.description, actor.id]))!;
     if (p.source_document_url) {
       const m = String(p.source_document_url).match(/^\/api\/files\/([0-9a-f-]{36})$/i)!;

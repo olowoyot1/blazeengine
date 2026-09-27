@@ -76,8 +76,13 @@ CREATE TABLE IF NOT EXISTS leads(
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE SEQUENCE IF NOT EXISTS sale_reference_seq;
+CREATE SEQUENCE IF NOT EXISTS transaction_reference_seq;
+
 CREATE TABLE IF NOT EXISTS sales(
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  sale_reference text,
+  transaction_type text NOT NULL DEFAULT 'INITIAL_DEPOSIT',
   client_id uuid REFERENCES clients(id),
   lead_id uuid REFERENCES leads(id),
   client_name text NOT NULL,
@@ -85,7 +90,10 @@ CREATE TABLE IF NOT EXISTS sales(
   property_name text,
   plot_reference text,
   amount numeric(14,2) NOT NULL DEFAULT 0,
+  estate_value numeric(14,2),
+  payment_amount numeric(14,2),
   quoted_amount numeric(14,2),
+  payment_plan text CHECK (payment_plan IN ('OUTRIGHT','INSTALLMENT')),
   description text,
   status text NOT NULL DEFAULT 'PENDING_SALES_APPROVAL',
   payment_status text NOT NULL DEFAULT 'UNPAID',
@@ -106,6 +114,17 @@ CREATE TABLE IF NOT EXISTS sales(
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS sale_reference text;
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS transaction_type text NOT NULL DEFAULT 'INITIAL_DEPOSIT';
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS transaction_reference text;
+ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS transaction_reference text;
+UPDATE sales SET sale_reference = 'SALE-' || to_char(created_at, 'YYYYMM') || '-' || upper(substr(replace(id::text, '-', ''), 1, 8)) WHERE sale_reference IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS sales_sale_reference_unique ON sales(sale_reference);
+UPDATE expenses SET transaction_reference = 'TXN-EXP-' || upper(substr(replace(id::text, '-', ''), 1, 12)) WHERE transaction_reference IS NULL;
+UPDATE payroll_runs SET transaction_reference = 'TXN-PAY-' || upper(substr(replace(id::text, '-', ''), 1, 12)) WHERE transaction_reference IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS expenses_transaction_reference_unique ON expenses(transaction_reference);
+CREATE UNIQUE INDEX IF NOT EXISTS payroll_transaction_reference_unique ON payroll_runs(transaction_reference);
 
 CREATE TABLE IF NOT EXISTS sale_documents(
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -143,6 +162,7 @@ CREATE TABLE IF NOT EXISTS operations(
 -- One row per vendor negotiation -> expense -> bank payment -> receipt lifecycle.
 CREATE TABLE IF NOT EXISTS expenses(
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  transaction_reference text,
   sale_id uuid REFERENCES sales(id),
   origin text NOT NULL DEFAULT 'NEGOTIATION' CHECK (origin IN ('NEGOTIATION','DIRECT')),
   category text NOT NULL,
@@ -177,6 +197,7 @@ CREATE TABLE IF NOT EXISTS approvals(
   seq int NOT NULL DEFAULT 1,
   step text NOT NULL,
   approver_role text NOT NULL,
+  approver_user_id uuid REFERENCES users(id),
   status text NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','APPROVED','REJECTED','CANCELLED')),
   comment text,
   submitted_by uuid REFERENCES users(id),
@@ -245,7 +266,8 @@ ON CONFLICT (name) DO NOTHING;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS session_version int NOT NULL DEFAULT 0;
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS quoted_amount numeric(14,2);
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS gate_approved_by uuid REFERENCES users(id);
-ALTER TABLE sales ADD COLUMN IF NOT EXISTS invoice_variance_reason text;
+  ALTER TABLE sales ADD COLUMN IF NOT EXISTS invoice_variance_reason text;
+  ALTER TABLE approvals ADD COLUMN IF NOT EXISTS approver_user_id uuid REFERENCES users(id);
 UPDATE sales SET quoted_amount = amount WHERE quoted_amount IS NULL;
 
 -- v3.2 additions: SUPER_ADMIN role, managed departments, real file uploads, client
@@ -333,7 +355,7 @@ ALTER TABLE approvals DROP CONSTRAINT IF EXISTS approvals_entity_type_check;
 ALTER TABLE approvals ADD CONSTRAINT approvals_entity_type_check CHECK (entity_type IN ('SALE','EXPENSE','PAYROLL'));
 
 CREATE TABLE IF NOT EXISTS payroll_runs(
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), period_start date NOT NULL, period_end date NOT NULL,
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), transaction_reference text, period_start date NOT NULL, period_end date NOT NULL,
   payroll_month text NOT NULL, status text NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT','PENDING_CEO_APPROVAL','APPROVED','REJECTED','DISBURSED')),
   total_gross numeric(14,2) NOT NULL DEFAULT 0, total_allowances numeric(14,2) NOT NULL DEFAULT 0, total_deductions numeric(14,2) NOT NULL DEFAULT 0, total_net numeric(14,2) NOT NULL DEFAULT 0,
   notes text, created_by uuid REFERENCES users(id), approved_by uuid REFERENCES users(id), approved_at timestamptz,

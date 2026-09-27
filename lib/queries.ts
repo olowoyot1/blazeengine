@@ -48,7 +48,7 @@ export async function getClient(id: string) {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
   const rows = await sql`select c.*, u.name creator from clients c left join users u on u.id=c.created_by where c.id=${id}::uuid`;
   if (!rows[0]) return null;
-  const sales = await sql`select id, property_name, plot_reference, amount, status from sales where client_id=${id}::uuid order by created_at desc`;
+  const sales = await sql`select id, sale_reference, property_name, plot_reference, amount, status from sales where client_id=${id}::uuid order by created_at desc`;
   return { client: rows[0], sales };
 }
 
@@ -93,6 +93,9 @@ export async function getExpense(u: U, id: string) {
 }
 
 // ---------------------------------------------------------------- Approvals
+export async function listActiveApprovers() {
+  return sql`select id, name, role from users where active=true and role in ('SALES_MANAGER','OPERATIONS_MANAGER','HR','CEO') order by role, name`;
+}
 /** Return one approval step this user can act on for a specific record. */
 export async function actionableApprovalForEntity(u: U, entityType: 'SALE' | 'EXPENSE', entityId: string) {
   if (!/^[0-9a-f-]{36}$/i.test(entityId)) return null;
@@ -107,7 +110,7 @@ export async function actionableApprovalForEntity(u: U, entityType: 'SALE' | 'EX
     left join payroll_runs p on a.entity_type='PAYROLL' and p.id=a.entity_id
     left join users sub on sub.id=a.submitted_by
     where a.entity_type=${entityType} and a.entity_id=${entityId}::uuid
-      and a.status='PENDING' and (${u.role}='SUPER_ADMIN' or a.approver_role=${u.role})
+      and a.status='PENDING' and (${u.role}='SUPER_ADMIN' or (a.approver_role=${u.role} and (a.approver_user_id is null or a.approver_user_id=${u.id}::uuid)))
       and a.submitted_by is distinct from ${u.id}::uuid
       and not exists (
         select 1 from approvals p where p.entity_type=a.entity_type and p.entity_id=a.entity_id
@@ -201,8 +204,8 @@ export async function companyStats() {
     sql`select status, count(*)::int n from sales group by status`,
     sql`select
       (select count(*)::int from sales where created_at >= date_trunc('month', now()) and status<>'CANCELLED') sales_month,
-      (select coalesce(sum(amount),0) from sales where created_at >= date_trunc('month', now()) and status<>'CANCELLED') value_month,
-      (select coalesce(sum(amount),0) from sales where status not in ('DRAFT','PAYMENT_PROOF_SUBMITTED','CANCELLED') and payment_status='VERIFIED') verified_value,
+      (select coalesce(sum(coalesce(payment_amount, amount)),0) from sales where created_at >= date_trunc('month', now()) and status<>'CANCELLED') value_month,
+      (select coalesce(sum(coalesce(payment_amount, amount)),0) from sales where status not in ('DRAFT','PAYMENT_PROOF_SUBMITTED','CANCELLED') and payment_status='VERIFIED') verified_value,
       (select count(*)::int from leads where status not in ('CONVERTED','LOST')) active_leads,
       (select count(*)::int from leads where (created_at at time zone 'Africa/Lagos')::date = (now() at time zone 'Africa/Lagos')::date) leads_today,
       (select count(*)::int from sales where status='ALLOCATED') allocated`,

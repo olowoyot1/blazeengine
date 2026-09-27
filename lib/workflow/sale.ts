@@ -5,10 +5,11 @@
  *  DRAFT ──submit_payment_proof──▶ PAYMENT_PROOF_SUBMITTED        Sales team uploads payment proof
  *  ──enter_invoice──▶ INVOICE_ENTERED                             Accountant enters invoice → back to Sales Mgr + Sales Exec
  *  ──approve_sale──▶ SALES_APPROVED                               Sales Manager approves → Operations receives approved sale
- *  ──create_contract──▶ CONTRACT_PREPARED                         Operations: contract + deed → back to Accounts
+ *  ──create_contract──▶ CONTRACT_PREPARED                         Operations: contract + acknowledgment + sales bundle → back to Accounts
  *  ──send_sales_documents──▶ ACCOUNT_DOCS_SENT                    Accountant: sales order, receipt, invoice sent
  *  ──open_ops_portal──▶ SITE_NOTIFIED                             Operations opens portal → Site Manager notified, ready for allocation (30-day clock)
- *  ──upload_allocation_docs──▶ OPS_DOCS_UPLOADED                  Operations: deed of assignment + survey (within 30 days)
+ *  ──upload_deed_of_assignment──▶ OPS_DEED_UPLOADED               Operations: deed of assignment
+ *  ──upload_survey_plan──────────▶ OPS_DOCS_UPLOADED                Site Manager: survey plan (within 30 days)
  *  ──final_audit──▶ IN_APPROVAL                                   Site Manager final audit, triggers all parties
  *      Sales Mgr → Operations Mgr → HR (internal audit) → CEO     approve one by one, then HR, then CEO
  *  ──(chain complete)──▶ FULLY_APPROVED                           (any rejection ⇒ RETURNED)
@@ -68,15 +69,27 @@ export const SALE_CHAIN: Step[] = [
   { step: 'HR internal audit', role: 'HR', seq: 3 },
   { step: 'CEO final approval', role: 'CEO', seq: 4 },
 ];
-const REQUIRED_DOCS = ['PAYMENT_PROOF', 'CONTRACT', 'DEED', 'DEED_OF_ASSIGNMENT', 'SURVEY_PLAN'];
+const REQUIRED_DOCS = ['PAYMENT_PROOF', 'CONTRACT', 'ACKNOWLEDGMENT_LETTER', 'SALES_DOCUMENTS', 'DEED_OF_ASSIGNMENT', 'SURVEY_PLAN'];
 const ALL_AFTER_APPROVAL = ['SITE_NOTIFIED', 'OPS_DOCS_UPLOADED', 'IN_APPROVAL', 'RETURNED', 'FULLY_APPROVED', 'PRE_ALLOCATION', 'ALLOCATION_SCHEDULED'];
 
 const reason: Field = { name: 'reason', label: 'Reason', type: 'textarea', required: true };
 
 export const SALE_ACTIONS: SaleAction[] = [
   {
+    key: 'submit_new_sale', label: 'Send for Sales Manager approval', ownOnly: true,
+    help: 'Submit this saved draft to a Sales Manager for review. You can continue editing before sending it for approval.',
+    roles: ['SALES', 'SALES_MANAGER'], from: ['DRAFT'], to: 'PENDING_SALES_APPROVAL',
+    fields: [],
+    async apply(ctx, s) {
+      const n = { title: 'New sale awaiting approval', message: `${saleLabel(s)} was submitted to a Sales Manager for approval.`, link: saleLink(s) };
+      await notifyRoles(ctx, ['SALES_MANAGER'], n);
+      await notifyUsers(ctx, [s.created_by], { ...n, title: 'Sale sent for approval', message: `${saleLabel(s)} is awaiting Sales Manager approval.` });
+      return 'Sale submitted for Sales Manager approval';
+    },
+  },
+  {
     key: 'approve_new_sale', label: 'Approve new sale',
-    help: 'Sales Manager reviews the newly created sale. Payment processing cannot start until this approval is completed.',
+    help: 'Sales Manager reviews the submitted sale. Payment processing cannot start until this approval is completed.',
     roles: ['SALES_MANAGER'], from: ['PENDING_SALES_APPROVAL'], to: 'DRAFT',
     fields: [{ name: 'note', label: 'Approval note (optional)', type: 'textarea' }],
     async apply(ctx, s, i) {
@@ -93,7 +106,7 @@ export const SALE_ACTIONS: SaleAction[] = [
   {
     key: 'submit_payment_proof', label: 'Upload payment proof', ownOnly: true,
     help: 'Client has paid. Attach the payment proof link and reference – Accounts is notified.',
-    roles: ['SALES', 'SALES_MANAGER'], from: ['DRAFT'], to: 'PAYMENT_PROOF_SUBMITTED',
+    roles: ['SALES', 'SALES_MANAGER'], from: ['PENDING_SALES_APPROVAL', 'DRAFT'], to: 'PAYMENT_PROOF_SUBMITTED',
     fields: [
       { name: 'proof_url', label: 'Payment proof', type: 'file', required: true, uploadPurpose: 'sales_payment_evidence' },
       { name: 'payment_reference', label: 'Payment reference', type: 'text', required: true },
@@ -103,7 +116,8 @@ export const SALE_ACTIONS: SaleAction[] = [
       await assertFreshEvidence(ctx, i.proof_url, 'payment proof');
       await addDoc(ctx, s.id, 'PAYMENT_PROOF', i.proof_url, 'Payment proof');
       await ctx.tx.query(`update sales set payment_status='PROOF_SUBMITTED', payment_reference=$2 where id=$1`, [s.id, i.payment_reference]);
-      await notifyRoles(ctx, ['ACCOUNTANT'], { title: 'Payment proof uploaded', message: `${saleLabel(s)} — reference ${i.payment_reference}. Enter the invoice.`, link: saleLink(s) });
+      await notifyRoles(ctx, ['SALES_MANAGER'], { title: 'Payment proof awaiting approval', message: `${saleLabel(s)} �� reference ${i.payment_reference}. Approve or cancel this sale.`, link: saleLink(s) });
+      await notifyRoles(ctx, ['ACCOUNTANT', 'FINANCE_OPERATIONS'], { title: 'Payment proof submitted', message: `${saleLabel(s)} is awaiting Sales Manager approval before Accounts processing.`, link: saleLink(s) });
       return `Payment ref ${i.payment_reference}${i.amount_paid ? ` (${money(i.amount_paid)})` : ''}`;
     },
   },
@@ -121,7 +135,7 @@ export const SALE_ACTIONS: SaleAction[] = [
   {
     key: 'enter_invoice', label: 'Enter invoice',
     help: 'Verify the payment and enter the invoice. If the amount differs from the original quote by more than 2%, a reason is required. On submission the sale goes back to the Sales Manager and Sales Executive.',
-    roles: ['ACCOUNTANT'], from: ['PAYMENT_PROOF_SUBMITTED'], to: 'INVOICE_ENTERED',
+    roles: ['ACCOUNTANT', 'FINANCE_OPERATIONS'], from: ['PAYMENT_PROOF_SUBMITTED', 'DRAFT'], to: 'INVOICE_ENTERED',
     fields: [
       { name: 'invoice_number', label: 'Invoice number', type: 'text', required: true },
       { name: 'invoice_amount', label: 'Invoice amount (₦)', type: 'number', required: true, min: 1 },
@@ -166,25 +180,49 @@ export const SALE_ACTIONS: SaleAction[] = [
       // require a *different* Sales Manager — one person shouldn't bless the same
       // sale twice under two different hats.
       await ctx.tx.query(`update sales set gate_approved_by=$2 where id=$1`, [s.id, ctx.actor.id]);
-      await openTask(ctx, s.id, 'CONTRACT_DEED');
-      const n = { title: 'Approved sale received', message: `${saleLabel(s)}. Create the contract and deed.`, link: saleLink(s) };
+      await openTask(ctx, s.id, 'SALE_DOCUMENTS');
+      const n = { title: 'Approved sale received', message: `${saleLabel(s)}. Create the Contract of Sale, Letter of Acknowledgment and Sales Documents bundle.`, link: saleLink(s) };
       await notifyRoles(ctx, OPS, n);
       await notifyUsers(ctx, [s.created_by], { ...n, title: 'Your sale was approved', message: `${saleLabel(s)} is with Operations.` });
     },
   },
   {
-    key: 'create_contract', label: 'Create contract & deed',
-    help: 'Operations prepares the contract and deed. On submission the sale goes back to Accounts.',
+    key: 'skip_topup_documents', label: 'Record top-up — no sale documents',
+    help: 'Top-up transactions do not require a Contract of Sale, Letter of Acknowledgment or Sales Documents bundle.',
+    roles: OPS, from: ['SALES_APPROVED'], to: 'SITE_NOTIFIED',
+    fields: [{ name: 'note', label: 'Note (optional)', type: 'textarea' }],
+    async apply(ctx, s, i) {
+      if (s.transaction_type !== 'TOP_UP') throw new WorkflowError('This shortcut is only available for top-up transactions');
+      await ctx.tx.query(`update sales set ops_due_date = current_date + ${ALLOCATION_WINDOW_DAYS} where id=$1`, [s.id]);
+      await openTask(ctx, s.id, 'ALLOCATION_DOCS', ALLOCATION_WINDOW_DAYS, 'Deed of assignment + survey plan');
+      await notifyRoles(ctx, ['SITE_MANAGER'], { title: 'Top-up ready for allocation', message: `${saleLabel(s)}. No sale documents are required for this top-up.${i.note ? ` ${i.note}` : ''}`, link: saleLink(s) });
+    },
+  },
+  {
+    key: 'create_contract', label: 'Create sale documents',
+    help: 'Operations prepares the Contract of Sale, Letter of Acknowledgment and Sales Documents bundle. On submission the sale goes back to Accounts.',
     roles: OPS, from: ['SALES_APPROVED'], to: 'CONTRACT_PREPARED',
     fields: [
-      { name: 'contract_url', label: 'Contract document', type: 'file', required: true },
-      { name: 'deed_url', label: 'Deed document', type: 'file', required: true },
+      { name: 'contract_url', label: 'Contract of Sale', type: 'file', required: true },
+      { name: 'acknowledgment_url', label: 'Letter of Acknowledgment', type: 'file', required: true },
+      { name: 'sales_documents_url', label: 'Sales Documents bundle', type: 'file', required: true },
     ],
     async apply(ctx, s, i) {
-      await addDoc(ctx, s.id, 'CONTRACT', i.contract_url, 'Contract');
-      await addDoc(ctx, s.id, 'DEED', i.deed_url, 'Deed');
-      await closeTasks(ctx, s.id, 'CONTRACT_DEED');
-      await notifyRoles(ctx, ['ACCOUNTANT'], { title: 'Contract & deed ready', message: `${saleLabel(s)}. Prepare and send the sales order, receipt and invoice.`, link: saleLink(s) });
+      if (s.transaction_type === 'TOP_UP') throw new WorkflowError('Top-up transactions do not receive sale documents');
+      await addDoc(ctx, s.id, 'CONTRACT', i.contract_url, 'Contract of Sale');
+      await addDoc(ctx, s.id, 'ACKNOWLEDGMENT_LETTER', i.acknowledgment_url, 'Letter of Acknowledgment');
+      await addDoc(ctx, s.id, 'SALES_DOCUMENTS', i.sales_documents_url, 'Sales Documents bundle');
+      await closeTasks(ctx, s.id, 'SALE_DOCUMENTS');
+      const originator = await one(ctx, `select id, role from users where id=$1 and active=true`, [s.created_by]);
+      if (!originator) throw new WorkflowError('The sales originator is no longer active and cannot approve these documents');
+      const originatorRole: Role = originator.role === 'SALES_MANAGER' ? 'SALES_MANAGER' : 'SALES';
+      const steps: Step[] = [
+        { step: 'Sales originator approval', role: originatorRole, seq: 1, userId: s.created_by },
+        { step: 'Sales Manager approval', role: 'SALES_MANAGER', seq: 2, userId: undefined },
+      ];
+      await openRound(ctx, 'SALE', s.id, 'SALE_DOCUMENTS_APPROVAL', Number(s.chain_round || 0) + 1, steps);
+      await notifyUsers(ctx, [s.created_by], { title: 'Operations documents ready for your approval', message: `${saleLabel(s)} — review the Contract of Sale, Letter of Acknowledgment and Sales Documents bundle.`, link: saleLink(s) });
+      await notifyRoles(ctx, ['SALES_MANAGER'], { title: 'Operations documents awaiting approval', message: `${saleLabel(s)} — review the three documents submitted by Operations.`, link: saleLink(s) });
     },
   },
   {
@@ -198,6 +236,8 @@ export const SALE_ACTIONS: SaleAction[] = [
       { name: 'documents_url', label: 'Documents bundle (optional)', type: 'file' },
     ],
     async apply(ctx, s, i) {
+      const documentApprovals = await one(ctx, `select count(*)::int as n from approvals where entity_type='SALE' and entity_id=$1 and round='SALE_DOCUMENTS_APPROVAL' and status='APPROVED'`, [s.id]);
+      if (Number(documentApprovals?.n || 0) < 2) throw new WorkflowError('Sales originator and Sales Manager must approve the Operations documents first');
       await ctx.tx.query(`update sales set sales_order_no=$2, sales_receipt_no=$3, sales_invoice_no=$4 where id=$1`,
         [s.id, i.sales_order_no, i.sales_receipt_no, i.sales_invoice_no]);
       await addDoc(ctx, s.id, 'SALES_DOCUMENTS', i.documents_url, 'Sales order, receipt & invoice');
@@ -215,24 +255,32 @@ export const SALE_ACTIONS: SaleAction[] = [
     async apply(ctx, s, i) {
       await ctx.tx.query(`update sales set ops_due_date = current_date + ${ALLOCATION_WINDOW_DAYS} where id=$1`, [s.id]);
       await openTask(ctx, s.id, 'ALLOCATION_DOCS', ALLOCATION_WINDOW_DAYS, 'Deed of assignment + survey plan');
-      await notifyRoles(ctx, ['SITE_MANAGER'], { title: 'Sale ready for allocation', message: `${saleLabel(s)}.${i.note ? ` ${i.note}` : ''}`, link: saleLink(s) });
+      await notifyRoles(ctx, ['SITE_MANAGER'], { title: 'Sale ready for allocation', message: `${saleLabel(s)}. Site Management should upload the deed of assignment and survey plan.${i.note ? ` ${i.note}` : ''}`, link: saleLink(s) });
     },
   },
   {
-    key: 'upload_allocation_docs', label: 'Upload deed of assignment & survey',
-    help: `Upload both documents to the portal (due ${ALLOCATION_WINDOW_DAYS} days after the portal was opened). The Site Manager is notified.`,
-    roles: OPS, from: ['SITE_NOTIFIED', 'RETURNED'], to: 'OPS_DOCS_UPLOADED',
-    fields: [
-      { name: 'deed_of_assignment_url', label: 'Deed of assignment', type: 'file', required: true },
-      { name: 'survey_plan_url', label: 'Survey plan', type: 'file', required: true },
-    ],
+    key: 'upload_deed_of_assignment', label: 'Upload deed of assignment',
+    help: 'Operations uploads the deed of assignment. Site Management separately uploads the survey plan.',
+    roles: ['OPERATIONS', 'OPERATIONS_MANAGER'], from: ['SITE_NOTIFIED', 'OPS_DEED_UPLOADED', 'RETURNED'], to: 'OPS_DEED_UPLOADED',
+    fields: [{ name: 'deed_of_assignment_url', label: 'Deed of assignment', type: 'file', required: true }],
     async apply(ctx, s, i) {
       await addDoc(ctx, s.id, 'DEED_OF_ASSIGNMENT', i.deed_of_assignment_url, 'Deed of assignment');
+      await notifyRoles(ctx, ['SITE_MANAGER'], { title: 'Deed of assignment ready', message: `${saleLabel(s)}. Upload the survey plan.`, link: saleLink(s) });
+    },
+  },
+  {
+    key: 'upload_survey_plan', label: 'Upload survey plan',
+    help: 'Site Management uploads the survey plan after Operations has uploaded the deed of assignment.',
+    roles: ['SITE_MANAGER'], from: ['SITE_NOTIFIED', 'OPS_DEED_UPLOADED', 'RETURNED'], to: 'OPS_DOCS_UPLOADED',
+    fields: [{ name: 'survey_plan_url', label: 'Survey plan', type: 'file', required: true }],
+    async apply(ctx, s, i) {
+      const deed = await one(ctx, `select id from sale_documents where sale_id=$1 and document_type='DEED_OF_ASSIGNMENT' limit 1`, [s.id]);
+      if (!deed) throw new WorkflowError('Operations must upload the deed of assignment before the Site Manager uploads the survey plan');
       await addDoc(ctx, s.id, 'SURVEY_PLAN', i.survey_plan_url, 'Survey plan');
       await closeTasks(ctx, s.id, 'ALLOCATION_DOCS');
       const due = d10(s.ops_due_date);
       const late = !!due && isoDay(new Date()) > due;
-      await notifyRoles(ctx, ['SITE_MANAGER'], { title: 'Operations documents uploaded', message: `${saleLabel(s)}. Perform the final audit.`, link: saleLink(s) });
+      await notifyRoles(ctx, ['SITE_MANAGER'], { title: 'Allocation documents uploaded', message: `${saleLabel(s)}. Perform the final audit.`, link: saleLink(s) });
       return late ? `LATE – documents were due ${due}` : 'On time';
     },
   },
@@ -242,6 +290,10 @@ export const SALE_ACTIONS: SaleAction[] = [
     roles: ['SITE_MANAGER'], from: ['OPS_DOCS_UPLOADED', 'RETURNED'], to: 'IN_APPROVAL',
     fields: [
       { name: 'audit_findings', label: 'Audit findings', type: 'textarea', required: true },
+      { name: 'sales_manager_id', label: 'Sales Manager approver', type: 'text', required: true },
+      { name: 'operations_manager_id', label: 'Operations Manager approver', type: 'text', required: true },
+      { name: 'hr_id', label: 'HR approver', type: 'text', required: true },
+      { name: 'ceo_id', label: 'CEO approver', type: 'text', required: true },
       { name: 'confirmed', label: 'I confirm all documents were reviewed', type: 'checkbox', required: true },
     ],
     async apply(ctx, s, i) {
@@ -253,7 +305,17 @@ export const SALE_ACTIONS: SaleAction[] = [
       await siteRecord(ctx, s.id, 'FINAL_SALE_AUDIT', { findings: i.audit_findings });
       const round = Number(s.chain_round) + 1;
       await ctx.tx.query(`update sales set chain_round=$2, returned_reason=null where id=$1`, [s.id, round]);
-      await openRound(ctx, 'SALE', s.id, 'SALE_CHAIN', round, SALE_CHAIN);
+      const assignments = { sales_manager_id: 'SALES_MANAGER', operations_manager_id: 'OPERATIONS_MANAGER', hr_id: 'HR', ceo_id: 'CEO' } as const;
+      const steps = SALE_CHAIN.map(step => {
+        const field = Object.entries(assignments).find(([, role]) => role === step.role)?.[0] as keyof typeof i | undefined;
+        return { ...step, userId: field ? String(i[field] || '') : '' };
+      });
+      const selected = steps.map(step => step.userId).filter(Boolean);
+      if (selected.length !== new Set(selected).size) throw new WorkflowError('Each approval step must be assigned to a different user');
+      const valid = await many(ctx, `select id, role from users where id = any($1::uuid[]) and active=true`, [selected]);
+      if (valid.length !== steps.length || steps.some(step => !valid.some(user => user.id === step.userId && user.role === step.role)))
+        throw new WorkflowError('Select an active user with the correct designation for every approval step');
+      await openRound(ctx, 'SALE', s.id, 'SALE_CHAIN', round, steps);
       await notifyRoles(ctx, ['OPERATIONS_MANAGER', 'HR', 'CEO', 'ACCOUNTANT'], { title: 'Final audit completed', message: `${saleLabel(s)} entered the approval chain.`, link: saleLink(s) });
       await notifyUsers(ctx, [s.created_by], { title: 'Sale in approval chain', message: saleLabel(s), link: saleLink(s) });
       return String(i.audit_findings);
@@ -345,10 +407,11 @@ const BY_KEY = new Map(SALE_ACTIONS.map(a => [a.key, a]));
 export const getSaleAction = (k: string) => BY_KEY.get(k);
 
 /** Actions this user may perform right now on this sale (drives the UI and the queue). */
-export function availableSaleActions(sale: { status: string; created_by?: string | null }, user: { id: string; role: Role }) {
+export function availableSaleActions(sale: { status: string; created_by?: string | null; transaction_type?: string | null }, user: { id: string; role: Role }) {
   return SALE_ACTIONS.filter(a =>
-    (user.role === 'SUPER_ADMIN' || a.roles.includes(user.role)) && a.from.includes(sale.status) &&
-    !(a.ownOnly && user.role === 'SALES' && sale.created_by !== user.id));
+  (user.role === 'SUPER_ADMIN' || a.roles.includes(user.role)) && a.from.includes(sale.status) &&
+  (sale.transaction_type !== 'TOP_UP' || a.key === 'skip_topup_documents' || a.key === 'open_ops_portal') &&
+  !(a.ownOnly && user.role === 'SALES' && sale.created_by !== user.id));
 }
 
 export async function performSaleAction(actor: Actor, saleId: string, key: string, input: Record<string, unknown>) {
@@ -373,14 +436,42 @@ export async function performSaleAction(actor: Actor, saleId: string, key: strin
 }
 const stageOf = (a: SaleAction) => a.roles.includes('SITE_MANAGER') ? 'SITE_MANAGEMENT' : a.roles.includes('ACCOUNTANT') ? 'ACCOUNTS' : a.roles.includes('OPERATIONS') ? 'OPERATIONS' : 'SALES';
 
+const SALE_EDIT_FIELDS: Field[] = [
+  { name: 'property_name', label: 'Estate / property', type: 'text', required: true },
+  { name: 'plot_reference', label: 'Plot reference', type: 'text', required: true },
+  { name: 'estate_value', label: 'Estate value (₦)', type: 'number', required: true, min: 1 },
+  { name: 'payment_amount', label: 'Payment amount (₦)', type: 'number', required: true, min: 1 },
+  { name: 'payment_plan', label: 'Payment plan', type: 'select', required: true, options: ['OUTRIGHT', 'INSTALLMENT'] },
+  { name: 'description', label: 'Description', type: 'textarea' },
+];
+
+export async function updateSale(actor: Actor, saleId: string, input: Record<string, unknown>) {
+  if (actor.role !== 'SUPER_ADMIN' && !['SALES_MANAGER'].includes(actor.role)) throw new ForbiddenError('Only a Sales Manager can edit a submitted sale');
+  const p = parseFields(SALE_EDIT_FIELDS, input);
+  return run(actor, async ctx => {
+    const sale = await one(ctx, `select * from sales where id=$1 for update`, [saleId]);
+    if (!sale) throw new WorkflowError('Sale not found');
+    if (sale.status !== 'PENDING_SALES_APPROVAL') throw new WorkflowError('Only a sale awaiting Sales Manager approval can be edited');
+    const taken = await one(ctx, `select id from sales where lower(property_name)=lower($1) and lower(plot_reference)=lower($2) and id<>$3 and status<>'CANCELLED' limit 1`, [p.property_name, p.plot_reference, saleId]);
+    if (taken) throw new WorkflowError('This plot is already attached to another active sale');
+    await ctx.tx.query(`update sales set property_name=$2, plot_reference=$3, estate_value=$4, payment_amount=$5, quoted_amount=$4, amount=$5, payment_plan=$6, description=$7, updated_at=now() where id=$1`, [saleId, p.property_name, p.plot_reference, p.estate_value, p.payment_amount, p.payment_plan, p.description]);
+    await logEvent(ctx, 'SALE', saleId, 'SALES', 'Sale adjusted by Sales Manager', sale.status, sale.status, `${p.property_name} / ${p.plot_reference}`);
+    await notifyUsers(ctx, [sale.created_by], { title: 'Sale adjusted by Sales Manager', message: `${saleLabel(sale)} was adjusted during approval review.`, link: saleLink(saleId) });
+    return saleId;
+  });
+}
+
 export async function createSale(actor: Actor, input: Record<string, unknown>) {
   if (actor.role !== 'SUPER_ADMIN' && !['SALES', 'SALES_MANAGER'].includes(actor.role)) throw new ForbiddenError('Only the sales team can create sales');
   const p = parseFields([
     { name: 'client_id', label: 'Client', type: 'text', required: true },
     { name: 'property_name', label: 'Estate / property', type: 'text', required: true },
     { name: 'plot_reference', label: 'Plot reference', type: 'text', required: true },
-    { name: 'amount', label: 'Sale amount (₦)', type: 'number', required: true, min: 1 },
-    { name: 'description', label: 'Description', type: 'textarea' },
+{ name: 'estate_value', label: 'Estate value (₦)', type: 'number', required: true, min: 1 },
+  { name: 'payment_amount', label: 'Payment amount (₦)', type: 'number', required: true, min: 1 },
+  { name: 'payment_plan', label: 'Payment plan', type: 'text', required: true },
+  { name: 'transaction_type', label: 'Transaction type', type: 'select', required: true, options: ['INITIAL_DEPOSIT', 'TOP_UP'] },
+  { name: 'description', label: 'Description', type: 'textarea' },
     { name: 'payment_proof_url', label: 'Payment evidence', type: 'file', uploadPurpose: 'sales_payment_evidence' },
     { name: 'payment_reference', label: 'Payment reference', type: 'text' },
   ], input);
@@ -398,21 +489,40 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
     }
     const paymentStatus = p.payment_proof_url ? 'PROOF_SUBMITTED' : 'UNPAID';
     const s = (await one(ctx,
-      `insert into sales(client_id,lead_id,client_name,client_email,property_name,plot_reference,amount,quoted_amount,description,status,payment_status,payment_reference,created_by)
-       values($1,(select id from leads where client_id=$1 limit 1),$2,$3,$4,$5,$6,$6,$7,'PENDING_SALES_APPROVAL',$8,$9,$10) returning id`,
-      [client.id, client.name, client.email, p.property_name, p.plot_reference, p.amount, p.description, paymentStatus, p.payment_reference ?? null, actor.id]))!;
+`insert into sales(sale_reference,transaction_type,client_id,lead_id,client_name,client_email,property_name,plot_reference,amount,estate_value,payment_amount,quoted_amount,payment_plan,description,status,payment_status,payment_reference,created_by)
+  values('SALE-' || to_char(now(), 'YYYYMM') || '-' || lpad(nextval('sale_reference_seq')::text, 6, '0'), $1, $2,(select id from leads where client_id=$2 limit 1),$3,$4,$5,$6,$7,$8,$9,$7,$10,$11,'DRAFT',$12,$13,$14) returning id, sale_reference`,
+  [p.transaction_type, client.id, client.name, client.email, p.property_name, p.plot_reference, p.estate_value, p.estate_value, p.payment_amount, p.payment_plan, p.description, paymentStatus, p.payment_reference ?? null, actor.id]))!;
     if (p.payment_proof_url) {
       const m = String(p.payment_proof_url).match(/^\/api\/files\/([0-9a-f-]{36})$/i)!;
       await ctx.tx.query(`insert into sale_documents(sale_id,document_type,document_name,document_url,uploaded_file_id,uploaded_by) values($1,'PAYMENT_PROOF','Payment evidence',$2,$3::uuid,$4)`, [s.id, p.payment_proof_url, m[1], actor.id]);
     }
-    await logEvent(ctx, 'SALE', s.id, 'SALES', 'Sale created', null, 'PENDING_SALES_APPROVAL', `${p.property_name} / ${p.plot_reference} · ${money(p.amount)}${p.payment_proof_url ? ' · payment evidence attached' : ''}`);
-    await audit(ctx, 'SALE_CREATED', 'SALE', s.id, { client: client.name, payment_evidence_attached: !!p.payment_proof_url });
-    await notifyRoles(ctx, ['SALES_MANAGER'], { title: 'New sale awaiting approval', message: `${client.name} — ${p.property_name} / ${p.plot_reference} · ${money(p.amount)}. Review the sale and any attached payment evidence before approval.`, link: saleLink(s.id) });
+  await logEvent(ctx, 'SALE', s.id, 'SALES', 'Sale saved as draft', null, 'DRAFT', `${p.property_name} / ${p.plot_reference} · estate ${money(p.estate_value)} · payment ${money(p.payment_amount)} (${p.payment_plan})${p.payment_proof_url ? ' · payment evidence attached' : ''}`);
+  await audit(ctx, 'SALE_CREATED', 'SALE', s.id, { client: client.name, status: 'DRAFT', payment_evidence_attached: !!p.payment_proof_url });
+  await notifyUsers(ctx, [actor.id], { title: 'Sale saved as draft', message: `${client.name} — ${p.property_name} / ${p.plot_reference} is saved as a draft. Submit it for Sales Manager approval when ready.`, link: saleLink(s.id) });
     return s.id as string;
   });
 }
 
 // ---- Approval-chain outcomes -------------------------------------------------
+registerRound('SALE_DOCUMENTS_APPROVAL', {
+  entity: 'SALE',
+  link: id => `/sales/${id}`,
+  async title(ctx, id) { const s = await one(ctx, `select * from sales where id=$1`, [id]); return s ? `${saleLabel(s)} — Operations documents` : ''; },
+  async onComplete(ctx, a) {
+    const s = (await one(ctx, `select * from sales where id=$1`, [a.entity_id]))!;
+    await logEvent(ctx, 'SALE', s.id, 'APPROVAL', 'Operations documents approved by Sales', 'CONTRACT_PREPARED', 'CONTRACT_PREPARED', null);
+    const n = { title: 'Operations documents approved', message: `${saleLabel(s)}. Accounts can now prepare the sales documents and the Landblaze portal is available.`, link: saleLink(s) };
+    await notifyRoles(ctx, ['ACCOUNTANT'], n);
+    await notifyUsers(ctx, [s.created_by], n);
+  },
+  async onReject(ctx, a, comment) {
+    const s = (await one(ctx, `update sales set status='RETURNED', returned_reason=$2, updated_at=now() where id=$1 returning *`, [a.entity_id, `${a.step}: ${comment}`]))!;
+    const n = { title: 'Operations documents returned', message: `${saleLabel(s)} — ${a.step}: ${comment}`, link: saleLink(s) };
+    await notifyRoles(ctx, ['OPERATIONS', 'OPERATIONS_MANAGER'], n);
+    await notifyUsers(ctx, [s.created_by], n);
+  },
+});
+
 registerRound('SALE_CHAIN', {
   entity: 'SALE',
   link: id => `/sales/${id}`,

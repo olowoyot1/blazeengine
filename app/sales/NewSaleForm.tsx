@@ -3,8 +3,12 @@ import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { newSale } from '@/lib/actions';
 
-export function NewSaleForm({ clients }: { clients: { id: string; name: string; phone?: string }[] }) {
-  const [values, setValues] = useState<Record<string, string>>({});
+export function NewSaleForm({ clients, initialClientId }: { clients: { id: string; name: string; phone?: string }[]; initialClientId?: string }) {
+  const [values, setValues] = useState<Record<string, string>>(() => {
+    const initial: Record<string, string> = {};
+    if (initialClientId) initial.client_id = initialClientId;
+    return initial;
+  });
   const [paymentProofName, setPaymentProofName] = useState('');
   const [uploadingProof, setUploadingProof] = useState(false);
   const [error, setError] = useState(''); const [pending, start] = useTransition();
@@ -27,7 +31,7 @@ export function NewSaleForm({ clients }: { clients: { id: string; name: string; 
     start(async () => {
       const r = await newSale(values);
       if ('error' in r) setError(r.error);
-      else if (r.id) router.push('/sales');
+      else if (r.id) router.push(`/sales/${r.id}?created=1`);
     });
   }
   return (
@@ -42,7 +46,10 @@ export function NewSaleForm({ clients }: { clients: { id: string; name: string; 
         </div>
         <div><label className="field">Estate / property *</label><input className="input" required value={values.property_name ?? ''} onChange={e => set('property_name', e.target.value)} /></div>
         <div><label className="field">Plot reference *</label><input className="input" required value={values.plot_reference ?? ''} onChange={e => set('plot_reference', e.target.value)} /></div>
-        <div><label className="field">Sale amount (₦) *</label><input className="input" type="number" min={1} required value={values.amount ?? ''} onChange={e => set('amount', e.target.value)} /></div>
+        <div><label className="field">Estate value (₦) *</label><input className="input" type="number" min={1} required value={values.estate_value ?? ''} onChange={e => set('estate_value', e.target.value)} /></div>
+        <div><label className="field">Payment amount (₦) *</label><input className="input" type="number" min={1} required value={values.payment_amount ?? ''} onChange={e => set('payment_amount', e.target.value)} /></div>
+        <div><label className="field">Payment plan *</label><select className="select" required value={values.payment_plan ?? ''} onChange={e => set('payment_plan', e.target.value)}><option value="" disabled>Select payment plan…</option><option value="OUTRIGHT">Outright</option><option value="INSTALLMENT">Installment</option></select></div>
+  <div><label className="field">Transaction type *</label><select className="select" required value={values.transaction_type ?? 'INITIAL_DEPOSIT'} onChange={e => set('transaction_type', e.target.value)}><option value="INITIAL_DEPOSIT">Initial deposit</option><option value="TOP_UP">Top-up</option></select></div>
         <div className="full-row"><label className="field">Description</label><textarea className="textarea" value={values.description ?? ''} onChange={e => set('description', e.target.value)} /></div>
         <div className="full-row notice">
           <strong>Payment evidence</strong>
@@ -54,7 +61,7 @@ export function NewSaleForm({ clients }: { clients: { id: string; name: string; 
           </div>}
         </div>
       </div>
-      <button className="btn primary" disabled={pending}>{pending ? 'Creating…' : 'Create sale'}</button>
+      <button className="btn primary" disabled={pending}>{pending ? 'Saving draft…' : 'Save sale as draft'}</button>
     </form>
   );
 }

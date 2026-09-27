@@ -9,7 +9,7 @@ import { sendMail } from './email';
 import { WorkflowError, ForbiddenError } from './workflow/core';
 import { decide } from './workflow/approvals';
 import { submitPayroll, disbursePayroll } from './workflow/payroll';
-import { performSaleAction, createSale } from './workflow/sale';
+import { performSaleAction, createSale, updateSale } from './workflow/sale';
 import { performExpenseAction, createNegotiation, createDirectExpense } from './workflow/expense';
 import { createLead, setLeadStatus, convertLead } from './workflow/leads';
 import { ROLES, type Role } from './constants';
@@ -35,6 +35,11 @@ export async function actExpense(id: string, key: string, input: Record<string, 
 export async function actDecide(approvalId: string, decision: 'APPROVED' | 'REJECTED', comment: string): Promise<Result> {
   const s = await requireUser();
   try { await decide(s, approvalId, decision, comment); revalidatePath('/approvals'); revalidatePath('/sales'); revalidatePath('/expenses'); revalidatePath('/dashboard'); revalidatePath('/notifications'); return { ok: true }; }
+  catch (e) { return toErr(e); }
+}
+export async function editSale(saleId: string, input: Record<string, unknown>): Promise<Result> {
+  const s = await requireUser();
+  try { const id = await updateSale(s, saleId, input); revalidatePath(`/sales/${saleId}`); revalidatePath('/sales'); revalidatePath('/dashboard'); revalidatePath('/notifications'); return { ok: true, id }; }
   catch (e) { return toErr(e); }
 }
 export async function newSale(input: Record<string, unknown>): Promise<Result> {
@@ -67,6 +72,23 @@ export async function newDirectExpense(input: Record<string, unknown>): Promise<
   try { const id = await createDirectExpense(s, input); revalidatePath('/expenses'); revalidatePath('/notifications'); return { ok: true, id }; }
   catch (e) { return toErr(e); }
 }
+export async function attachSaleDocument(saleId: string, documentType: string, documentName: string, filePath: string): Promise<Result> {
+  const s = await requireCap('sale.read', 'sale.read_all');
+  try {
+    if (!/^[0-9a-f-]{36}$/i.test(saleId)) return { error: 'Invalid sale' };
+    const m = filePath.match(/^\/api\/files\/([0-9a-f-]{36})$/i);
+    if (!m) return { error: 'Invalid document upload' };
+    const f = await sql`select id from uploaded_files where id=${m[1]}::uuid and uploaded_by=${s.id}::uuid`;
+    if (!f.length) return { error: 'You can only attach files you uploaded.' };
+    const sale = await sql`select id from sales where id=${saleId}::uuid`;
+    if (!sale.length) return { error: 'Sale not found' };
+    await sql`insert into sale_documents(sale_id,document_type,document_name,uploaded_file_id,uploaded_by)
+      values(${saleId}::uuid,${documentType.trim() || 'SUPPORTING_DOCUMENT'},${documentName.trim().slice(0,200)},${m[1]}::uuid,${s.id}::uuid)`;
+    revalidatePath(`/sales/${saleId}`); revalidatePath('/sales');
+    return { ok: true };
+  } catch (e) { return toErr(e); }
+}
+
 export async function attachExpenseDocument(expenseId: string, documentType: string, documentName: string, filePath: string): Promise<Result> {
   const s = await requireCap('expense.read', 'expense.read_all', 'finance.workspace');
   try {
@@ -319,8 +341,8 @@ export async function createPayrollRun(input: { payrollMonth: string; periodStar
   try {
     const existing = await sql`select id from payroll_runs where payroll_month=${input.payrollMonth.trim()}`;
     if (existing.length) return { error: 'A payroll run already exists for this month.' };
-    const runRows = await sql`insert into payroll_runs(payroll_month,period_start,period_end,notes,created_by)
-      values(${input.payrollMonth.trim()},${input.periodStart},${input.periodEnd},${input.notes||null},${s.id}::uuid) returning id`;
+    const runRows = await sql`insert into payroll_runs(transaction_reference,payroll_month,period_start,period_end,notes,created_by)
+      values('TXN-PAY-' || lpad(nextval('transaction_reference_seq')::text, 8, '0'),${input.payrollMonth.trim()},${input.periodStart},${input.periodEnd},${input.notes||null},${s.id}::uuid) returning id`;
     const runId = runRows[0].id;
     await sql`insert into payroll_items(payroll_run_id,employee_id,base_salary,allowances,deductions,gross_salary,net_salary)
       select ${runId}::uuid,e.id,coalesce(e.base_salary,0),0,0,coalesce(e.base_salary,0),coalesce(e.base_salary,0)
