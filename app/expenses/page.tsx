@@ -1,3 +1,7 @@
+export const dynamic = 'force-dynamic';
+
+import Shell from '@/components/Shell';
+// ... rest of your existing app/expenses/page.tsx code
 import Shell from '@/components/Shell';
 import Link from 'next/link';
 import { requireCap } from '@/lib/guard';
