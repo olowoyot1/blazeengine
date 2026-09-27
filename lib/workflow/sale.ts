@@ -75,9 +75,21 @@ const reason: Field = { name: 'reason', label: 'Reason', type: 'textarea', requi
 
 export const SALE_ACTIONS: SaleAction[] = [
   {
+    key: 'submit_new_sale', label: 'Send for Sales Manager approval', ownOnly: true,
+    help: 'Submit this saved draft to a Sales Manager for review. You can continue editing before sending it for approval.',
+    roles: ['SALES', 'SALES_MANAGER'], from: ['DRAFT'], to: 'PENDING_SALES_APPROVAL',
+    fields: [],
+    async apply(ctx, s) {
+      const n = { title: 'New sale awaiting approval', message: `${saleLabel(s)} was submitted to a Sales Manager for approval.`, link: saleLink(s) };
+      await notifyRoles(ctx, ['SALES_MANAGER'], n);
+      await notifyUsers(ctx, [s.created_by], { ...n, title: 'Sale sent for approval', message: `${saleLabel(s)} is awaiting Sales Manager approval.` });
+      return 'Sale submitted for Sales Manager approval';
+    },
+  },
+  {
     key: 'approve_new_sale', label: 'Approve new sale',
-    help: 'Sales Manager reviews the newly created sale. Payment processing cannot start until this approval is completed.',
-    roles: ['SALES_MANAGER'], from: ['PENDING_SALES_APPROVAL', 'PAYMENT_PROOF_SUBMITTED'], to: 'DRAFT',
+    help: 'Sales Manager reviews the submitted sale. Payment processing cannot start until this approval is completed.',
+    roles: ['SALES_MANAGER'], from: ['PENDING_SALES_APPROVAL'], to: 'DRAFT',
     fields: [{ name: 'note', label: 'Approval note (optional)', type: 'textarea' }],
     async apply(ctx, s, i) {
       await ctx.tx.query(`update sales set gate_approved_by=$2 where id=$1`, [s.id, ctx.actor.id]);
@@ -416,15 +428,15 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
     const paymentStatus = p.payment_proof_url ? 'PROOF_SUBMITTED' : 'UNPAID';
     const s = (await one(ctx,
 `insert into sales(client_id,lead_id,client_name,client_email,property_name,plot_reference,amount,estate_value,payment_amount,quoted_amount,payment_plan,description,status,payment_status,payment_reference,created_by)
-  values($1,(select id from leads where client_id=$1 limit 1),$2,$3,$4,$5,$6,$7,$8,$7,$9,$10,'PENDING_SALES_APPROVAL',$11,$12,$13) returning id`,
+  values($1,(select id from leads where client_id=$1 limit 1),$2,$3,$4,$5,$6,$7,$8,$7,$9,$10,'DRAFT',$11,$12,$13) returning id`,
   [client.id, client.name, client.email, p.property_name, p.plot_reference, p.estate_value, p.estate_value, p.payment_amount, p.payment_plan, p.description, paymentStatus, p.payment_reference ?? null, actor.id]))!;
     if (p.payment_proof_url) {
       const m = String(p.payment_proof_url).match(/^\/api\/files\/([0-9a-f-]{36})$/i)!;
       await ctx.tx.query(`insert into sale_documents(sale_id,document_type,document_name,document_url,uploaded_file_id,uploaded_by) values($1,'PAYMENT_PROOF','Payment evidence',$2,$3::uuid,$4)`, [s.id, p.payment_proof_url, m[1], actor.id]);
     }
-    await logEvent(ctx, 'SALE', s.id, 'SALES', 'Sale created', null, 'PENDING_SALES_APPROVAL', `${p.property_name} / ${p.plot_reference} · estate ${money(p.estate_value)} · payment ${money(p.payment_amount)} (${p.payment_plan})${p.payment_proof_url ? ' · payment evidence attached' : ''}`);
-    await audit(ctx, 'SALE_CREATED', 'SALE', s.id, { client: client.name, payment_evidence_attached: !!p.payment_proof_url });
-    await notifyRoles(ctx, ['SALES_MANAGER'], { title: 'New sale awaiting approval', message: `${client.name} — ${p.property_name} / ${p.plot_reference} · estate ${money(p.estate_value)} · payment ${money(p.payment_amount)} (${p.payment_plan}). Review the sale and any attached payment evidence before approval.`, link: saleLink(s.id) });
+  await logEvent(ctx, 'SALE', s.id, 'SALES', 'Sale saved as draft', null, 'DRAFT', `${p.property_name} / ${p.plot_reference} · estate ${money(p.estate_value)} · payment ${money(p.payment_amount)} (${p.payment_plan})${p.payment_proof_url ? ' · payment evidence attached' : ''}`);
+  await audit(ctx, 'SALE_CREATED', 'SALE', s.id, { client: client.name, status: 'DRAFT', payment_evidence_attached: !!p.payment_proof_url });
+  await notifyUsers(ctx, [actor.id], { title: 'Sale saved as draft', message: `${client.name} — ${p.property_name} / ${p.plot_reference} is saved as a draft. Submit it for Sales Manager approval when ready.`, link: saleLink(s.id) });
     return s.id as string;
   });
 }
