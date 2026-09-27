@@ -7,6 +7,10 @@ import { marketerReport, salesReport, hrReport, opsReport, siteReport, financeRe
 import { naira, human, fmtDate } from '@/lib/format';
 import { DAILY_LEAD_TARGET } from '@/lib/constants';
 
+function barWidth(value: number, maximum: number) {
+  return maximum > 0 ? `${Math.max(4, Math.round((value / maximum) * 100))}%` : '0%';
+}
+
 /**
  * Runs one report section's query + render in isolation. If it throws (a bad query,
  * a transient Neon hiccup, whatever), the real error is logged server-side — visible
@@ -183,17 +187,29 @@ export default async function Reports() {
   if (can(s.role, 'report.company')) {
     sections.unshift(await section('company', 'CEO — overall dashboard', async () => {
       const stats = await companyStats();
+      const funnelRows = stats.funnel.filter((r: any) => Number(r.n) > 0);
+      const maxFunnel = Math.max(...funnelRows.map((r: any) => Number(r.n)), 1);
       return (
         <div className="card" key="company">
           <h3>CEO — overall dashboard</h3>
+          <div className="grid" style={{ margin: '12px 0' }}>
+            <div className="stat"><div className="label">Sales this month</div><h2>{Number(stats.kpi.sales_month ?? 0)}</h2><div className="muted">{naira(stats.kpi.value_month ?? 0)}</div></div>
+            <div className="stat"><div className="label">Verified sales</div><h2>{naira(stats.kpi.verified_value ?? 0)}</h2><div className="muted">confirmed payment value</div></div>
+            <div className="stat"><div className="label">Active leads</div><h2>{Number(stats.kpi.active_leads ?? 0)}</h2><div className="muted">{Number(stats.kpi.leads_today ?? 0)} captured today</div></div>
+            <div className="stat"><div className="label">Allocated plots</div><h2>{Number(stats.kpi.allocated ?? 0)}</h2><div className="muted">all-time</div></div>
+          </div>
+          <h4>Sales pipeline</h4>
+          <div className="workflow" aria-label="Sales pipeline chart">
+            {funnelRows.map((r: any) => <div className="stage" key={r.status}><b>{human(r.status)}</b><div>{Number(r.n)}</div><div style={{ height: 6, width: barWidth(Number(r.n), maxFunnel), background: 'var(--primary)', borderRadius: 999 }} /></div>)}
+          </div>
           <div className="table-wrap"><table className="table"><thead><tr><th>Metric</th><th>Value</th></tr></thead>
             <tbody>
-              <tr><td>Sales this month</td><td>{stats.kpi.sales_month} · {naira(stats.kpi.value_month)}</td></tr>
-              <tr><td>Verified sales value</td><td>{naira(stats.kpi.verified_value)}</td></tr>
-              <tr><td>Active leads</td><td>{stats.kpi.active_leads}</td></tr>
-              <tr><td>Allocated plots (all-time)</td><td>{stats.kpi.allocated}</td></tr>
-              <tr><td>Operations documents overdue</td><td>{stats.sla.ops_docs_overdue}</td></tr>
-              <tr><td>Allocation-notice window overdue</td><td>{stats.sla.allocation_notice_overdue}</td></tr>
+              <tr><td>Sales this month</td><td>{Number(stats.kpi.sales_month ?? 0)} · {naira(stats.kpi.value_month ?? 0)}</td></tr>
+              <tr><td>Verified sales value</td><td>{naira(stats.kpi.verified_value ?? 0)}</td></tr>
+              <tr><td>Active leads</td><td>{Number(stats.kpi.active_leads ?? 0)}</td></tr>
+              <tr><td>Allocated plots (all-time)</td><td>{Number(stats.kpi.allocated ?? 0)}</td></tr>
+              <tr><td>Operations documents overdue</td><td>{Number(stats.sla.ops_docs_overdue ?? 0)}</td></tr>
+              <tr><td>Allocation-notice window overdue</td><td>{Number(stats.sla.allocation_notice_overdue ?? 0)}</td></tr>
             </tbody>
           </table></div>
         </div>

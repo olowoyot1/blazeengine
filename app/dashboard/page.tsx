@@ -17,10 +17,10 @@ export default async function Dashboard() {
   return (
     <Shell s={s} title="Overall Dashboard" kicker={`${s.name} · ${s.role.replace(/_/g, ' ')}`}>
       <div className="grid">
-        <div className="card stat"><div className="label">Sales this month</div><h2>{kpi.sales_month}</h2><div className="muted">{naira(kpi.value_month)}</div></div>
-        <div className="card stat"><div className="label">Active leads</div><h2>{kpi.active_leads}</h2><div className="muted">{kpi.leads_today} captured today</div></div>
-        <div className="card stat"><div className="label">Pending approvals</div><h2>{approvals.reduce((a: number, r: any) => a + r.n, 0)}</h2><div className="muted">across all roles</div></div>
-        <div className="card stat"><div className="label">Plots allocated</div><h2>{kpi.allocated}</h2><div className="muted">all-time to date</div></div>
+        <div className="card stat"><div className="label">Sales this month</div><h2>{Number(kpi.sales_month ?? 0)}</h2><div className="muted">{naira(kpi.value_month ?? 0)}</div></div>
+        <div className="card stat"><div className="label">Active leads</div><h2>{Number(kpi.active_leads ?? 0)}</h2><div className="muted">{Number(kpi.leads_today ?? 0)} captured today</div></div>
+        <div className="card stat"><div className="label">Pending approvals</div><h2>{approvals.reduce((a: number, r: any) => a + Number(r.n ?? 0), 0)}</h2><div className="muted">across all roles</div></div>
+        <div className="card stat"><div className="label">Plots allocated</div><h2>{Number(kpi.allocated ?? 0)}</h2><div className="muted">all-time to date</div></div>
       </div>
 
       {(sla.ops_docs_overdue > 0 || sla.allocation_notice_overdue > 0) && (

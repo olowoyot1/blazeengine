@@ -204,8 +204,8 @@ export async function companyStats() {
     sql`select status, count(*)::int n from sales group by status`,
     sql`select
       (select count(*)::int from sales where created_at >= date_trunc('month', now()) and status<>'CANCELLED') sales_month,
-      (select coalesce(sum(amount),0) from sales where created_at >= date_trunc('month', now()) and status<>'CANCELLED') value_month,
-      (select coalesce(sum(amount),0) from sales where status not in ('DRAFT','PAYMENT_PROOF_SUBMITTED','CANCELLED') and payment_status='VERIFIED') verified_value,
+      (select coalesce(sum(coalesce(payment_amount, amount)),0) from sales where created_at >= date_trunc('month', now()) and status<>'CANCELLED') value_month,
+      (select coalesce(sum(coalesce(payment_amount, amount)),0) from sales where status not in ('DRAFT','PAYMENT_PROOF_SUBMITTED','CANCELLED') and payment_status='VERIFIED') verified_value,
       (select count(*)::int from leads where status not in ('CONVERTED','LOST')) active_leads,
       (select count(*)::int from leads where (created_at at time zone 'Africa/Lagos')::date = (now() at time zone 'Africa/Lagos')::date) leads_today,
       (select count(*)::int from sales where status='ALLOCATED') allocated`,
