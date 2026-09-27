@@ -1,11 +1,6 @@
 import { Pool } from 'pg';
 
-const connectionString =
-  process.env.DATABASE_URL_2 ||
-  process.env.DATABASE_URL ||
-  process.env.DATABASE_URL_3 ||
-  process.env.POSTGRES_URL ||
-  process.env.POSTGRES_PRISMA_URL;
+const connectionString = process.env.DATABASE_URL;
 
 export const pool = new Pool({
   connectionString: connectionString || 'postgres://placeholder:placeholder@localhost:5432/placeholder',
