@@ -8,7 +8,7 @@ import { NewNegotiationForm } from './NewNegotiationForm';
 
 export default async function SiteManagement() {
   const s = await requireCap('site.workspace');
-  const [needsAudit, inApproval, fullyApproved, preAlloc, scheduled, records, negotiations] = await Promise.all([
+  const results = await Promise.allSettled([
     listSales(s, { status: 'OPS_DOCS_UPLOADED' }),
     listSales(s, { status: 'IN_APPROVAL' }),
     listSales(s, { status: 'FULLY_APPROVED' }),
@@ -17,6 +17,13 @@ export default async function SiteManagement() {
     siteRecords(60),
     listExpenses(s, ['NEGOTIATION_SUBMITTED']),
   ]);
+  const [needsAudit, inApproval, fullyApproved, preAlloc, scheduled, records, negotiations] = results.map((result, index) => {
+    if (result.status === 'rejected') {
+      console.error(`[site-management] data section ${index + 1} failed:`, result.reason);
+      return [];
+    }
+    return result.value;
+  });
   return (
     <Shell s={s} title="Site Management" kicker="Site Manager · final audit, negotiations, pre-allocation & allocation">
       <div className="grid">
