@@ -220,27 +220,37 @@ export async function companyStats() {
 
 // ---------------------------------------------------------------- Reports
 export async function marketerReport() {
-  return sql`
-    with days as (
-      select l.owner_id, (l.created_at at time zone 'Africa/Lagos')::date d, count(*) n from leads l
-      where l.created_at >= now() - interval '14 days' group by 1,2)
-    select u.id, u.name, u.role,
-      coalesce((select n from days where owner_id=u.id and d=(now() at time zone 'Africa/Lagos')::date),0)::int today,
-      (select count(*)::int from leads where owner_id=u.id and created_at >= now() - interval '7 days') last7,
-      (select count(*)::int from leads where owner_id=u.id and created_at >= now() - interval '30 days') last30,
-      (select count(*)::int from leads where owner_id=u.id and status='CONVERTED' and updated_at >= now() - interval '30 days') converted30,
-      (select count(*)::int from days where owner_id=u.id and n >= ${DAILY_LEAD_TARGET}) target_days14
-    from users u where u.active and u.role in ('MARKETER','SALES') order by last30 desc, u.name`;
+  try {
+    return await sql`
+      with days as (
+        select l.owner_id, (l.created_at at time zone 'Africa/Lagos')::date d, count(*) n from leads l
+        where l.created_at >= now() - interval '14 days' group by 1,2)
+      select u.id, u.name, u.role,
+        coalesce((select n from days where owner_id=u.id and d=(now() at time zone 'Africa/Lagos')::date),0)::int today,
+        (select count(*)::int from leads where owner_id=u.id and created_at >= now() - interval '7 days') last7,
+        (select count(*)::int from leads where owner_id=u.id and created_at >= now() - interval '30 days') last30,
+        (select count(*)::int from leads where owner_id=u.id and status='CONVERTED' and updated_at >= now() - interval '30 days') converted30,
+        (select count(*)::int from days where owner_id=u.id and n >= ${DAILY_LEAD_TARGET}) target_days14
+      from users u where u.active and u.role in ('MARKETER','SALES') order by last30 desc, u.name`;
+  } catch (error) {
+    console.error('[reports:marketers] failed to load:', error);
+    return [];
+  }
 }
 export async function salesReport() {
-  const [byExec, byMonth] = await Promise.all([
+  const [byExec, byMonth] = await Promise.allSettled([
     sql`select coalesce(u.name,'—') name, count(s.id)::int sales, coalesce(sum(s.amount),0) value,
         count(*) filter (where s.status='ALLOCATED')::int allocated
         from sales s left join users u on u.id=s.created_by where s.status<>'CANCELLED' group by 1 order by value desc`,
-    sql`select to_char(date_trunc('month',created_at),'Mon YYYY') month, count(*)::int sales, coalesce(sum(amount),0) value
-        from sales where created_at >= now() - interval '12 months' and status<>'CANCELLED' group by date_trunc('month',created_at) order by date_trunc('month',created_at)`,
+    sql`select to_char(date_trunc('month',s.created_at),'Mon YYYY') month, count(*)::int sales, coalesce(sum(s.amount),0) value
+        from sales s where s.created_at >= now() - interval '12 months' and s.status<>'CANCELLED' group by date_trunc('month',s.created_at) order by date_trunc('month',s.created_at)`,
   ]);
-  return { byExec, byMonth };
+  if (byExec.status === 'rejected') console.error('[reports:sales-by-executive] failed to load:', byExec.reason);
+  if (byMonth.status === 'rejected') console.error('[reports:sales-by-month] failed to load:', byMonth.reason);
+  return {
+    byExec: byExec.status === 'fulfilled' ? byExec.value : [],
+    byMonth: byMonth.status === 'fulfilled' ? byMonth.value : [],
+  };
 }
 export async function hrReport() {
   const [activity, turnaround, aging, headcount] = await Promise.all([
