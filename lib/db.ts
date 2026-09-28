@@ -12,7 +12,12 @@ let schemaReady: Promise<void> | null = null;
 async function ensureApprovalSchema() {
   if (!connectionString) return;
   if (!schemaReady) {
-    schemaReady = pool.query(`ALTER TABLE approvals ADD COLUMN IF NOT EXISTS approver_user_id uuid`).then(() => undefined).catch((error) => {
+    schemaReady = pool.query(`
+      ALTER TABLE approvals ADD COLUMN IF NOT EXISTS approver_user_id uuid;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS transaction_type text NOT NULL DEFAULT 'INITIAL_DEPOSIT';
+      ALTER TABLE expenses ADD COLUMN IF NOT EXISTS transaction_reference text;
+      ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS transaction_reference text;
+    `).then(() => undefined).catch((error) => {
       schemaReady = null;
       throw error;
     });
