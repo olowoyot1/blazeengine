@@ -59,6 +59,21 @@ async function ensureApprovalSchema() {
       ALTER TABLE operations ADD COLUMN IF NOT EXISTS notes text;
       ALTER TABLE operations ADD COLUMN IF NOT EXISTS completed_at timestamptz;
       ALTER TABLE operations ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
+      CREATE TABLE IF NOT EXISTS customer_campaigns (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        channel text NOT NULL,
+        audience text NOT NULL,
+        subject text,
+        body text NOT NULL,
+        status text NOT NULL DEFAULT 'SENDING',
+        recipient_count int NOT NULL DEFAULT 0,
+        sent_count int NOT NULL DEFAULT 0,
+        failed_count int NOT NULL DEFAULT 0,
+        error text,
+        created_by uuid,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        completed_at timestamptz
+      );
     `).then(() => undefined).catch((error) => {
       schemaReady = null;
       throw error;
