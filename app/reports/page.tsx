@@ -150,8 +150,8 @@ export default async function Reports() {
     sections.push(await section('finance', 'Finance', async () => {
       const fin = await financeReport();
       return (
-        <div className="card" key="finance">
-          <h3>Finance</h3>
+  <div className="card" key="finance">
+  <div className="section-title"><h3>Finance</h3><a className="btn" href="https://landblaze.oaatz.com" target="_blank" rel="noreferrer">Post</a></div>
           <div className="table-wrap"><table className="table"><thead><tr><th>Status</th><th>Count</th><th>Total</th></tr></thead>
             <tbody>{fin.byStatus.map((r: any) => <tr key={r.status}><td>{human(r.status)}</td><td>{r.n}</td><td>{naira(r.total)}</td></tr>)}</tbody>
           </table></div>

@@ -21,6 +21,10 @@ export default async function Accounts() {
         <WorkQueue title="Payment proof to verify → enter invoice" sales={proof} emptyLabel="Nothing waiting." />
         <WorkQueue title="Awaiting Sales Manager approval" sales={invoiced} emptyLabel="Nothing waiting." />
       </div>
+      <div className="card" style={{ marginTop: 15 }}>
+        <div className="section-title"><h3>Zoho Books</h3><a className="btn" href="https://landblaze.oaatz.com" target="_blank" rel="noreferrer">Post</a></div>
+        <p className="muted small">Post approved accounting records to Zoho Books through the Landblaze portal.</p>
+      </div>
       <div className="grid2" style={{ marginTop: 15 }}>
         <WorkQueue title="Contract ready → send sales documents" sales={contracted} emptyLabel="Nothing waiting." />
         <div className="card">
