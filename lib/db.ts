@@ -17,6 +17,12 @@ async function ensureApprovalSchema() {
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS transaction_type text NOT NULL DEFAULT 'INITIAL_DEPOSIT';
       ALTER TABLE expenses ADD COLUMN IF NOT EXISTS transaction_reference text;
       ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS transaction_reference text;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS invoice_number text;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS approved_at timestamptz;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS allocation_date date;
+      ALTER TABLE expenses ADD COLUMN IF NOT EXISTS negotiated_amount numeric;
+      ALTER TABLE expenses ADD COLUMN IF NOT EXISTS paid_at timestamptz;
+      ALTER TABLE workflow_events ADD COLUMN IF NOT EXISTS to_status text;
       CREATE TABLE IF NOT EXISTS site_records (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
         sale_id uuid NOT NULL,

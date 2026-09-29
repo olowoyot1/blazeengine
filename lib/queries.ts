@@ -281,17 +281,18 @@ export async function opsReport() {
   return { tasks, cycle: cycle[0], late };
 }
 export async function siteReport() {
-  const [stages, upcoming, notice, records] = await Promise.all([
+  const [stages, upcoming, notice, records] = await Promise.allSettled([
     sql`select status, count(*)::int n from sales where status in ('SITE_NOTIFIED','OPS_DOCS_UPLOADED','IN_APPROVAL','RETURNED','FULLY_APPROVED','PRE_ALLOCATION','ALLOCATION_SCHEDULED','ALLOCATED') group by 1`,
     sql`select client_name, plot_reference, property_name, allocation_date from sales where status='ALLOCATION_SCHEDULED' order by allocation_date limit 50`,
     sql`select client_name, plot_reference, status, approved_at, (approved_at::date + ${ALLOCATION_WINDOW_DAYS}) notice_due from sales
         where status in ('FULLY_APPROVED','PRE_ALLOCATION') order by approved_at limit 50`,
     sql`select record_type, count(*)::int n from site_records where created_at >= now() - interval '30 days' group by 1 order by n desc`,
   ]);
-  return { stages, upcoming, notice, records };
+  const value = (result: PromiseSettledResult<Row[]>) => result.status === 'fulfilled' ? result.value : [];
+  return { stages: value(stages), upcoming: value(upcoming), notice: value(notice), records: value(records) };
 }
 export async function financeReport() {
-  const [byStatus, monthly, cycle, invoiced] = await Promise.all([
+  const [byStatus, monthly, cycle, invoiced] = await Promise.allSettled([
     sql`select status, count(*)::int n, coalesce(sum(coalesce(amount,negotiated_amount)),0) total from expenses group by 1 order by n desc`,
     sql`select to_char(date_trunc('month',paid_at),'Mon YYYY') month, count(*)::int n, coalesce(sum(amount),0) total
         from expenses where paid_at is not null group by date_trunc('month',paid_at) order by date_trunc('month',paid_at) desc limit 12`,
@@ -299,7 +300,9 @@ export async function financeReport() {
         join (select entity_id, min(created_at) t from workflow_events where to_status='RECEIPT_ISSUED' group by 1) r on r.entity_id=c.id`,
     sql`select count(*)::int n, coalesce(sum(amount),0) total from sales where invoice_number is not null and status<>'CANCELLED'`,
   ]);
-  return { byStatus, monthly, cycle: cycle[0], invoiced: invoiced[0] };
+  const rows = (result: PromiseSettledResult<Row[]>) => result.status === 'fulfilled' ? result.value : [];
+  const first = (result: PromiseSettledResult<Row[]>) => rows(result)[0] ?? {};
+  return { byStatus: rows(byStatus), monthly: rows(monthly), cycle: first(cycle), invoiced: first(invoiced) };
 }
 export async function myActivity(userId: string) {
   return sql`select action, count(*)::int n from audit_logs where user_id=${userId}::uuid and created_at >= now() - interval '30 days' group by 1 order by n desc limit 15`;
