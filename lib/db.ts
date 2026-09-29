@@ -38,6 +38,21 @@ async function ensureApprovalSchema() {
         completed_at timestamptz,
         created_at timestamptz NOT NULL DEFAULT now()
       );
+      ALTER TABLE site_records ADD COLUMN IF NOT EXISTS sale_id uuid;
+      ALTER TABLE site_records ADD COLUMN IF NOT EXISTS record_type text;
+      ALTER TABLE site_records ADD COLUMN IF NOT EXISTS details jsonb NOT NULL DEFAULT '{}';
+      ALTER TABLE site_records ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'DONE';
+      ALTER TABLE site_records ADD COLUMN IF NOT EXISTS created_by uuid;
+      ALTER TABLE site_records ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
+      ALTER TABLE site_records ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+      ALTER TABLE operations ADD COLUMN IF NOT EXISTS sale_id uuid;
+      ALTER TABLE operations ADD COLUMN IF NOT EXISTS task_type text;
+      ALTER TABLE operations ADD COLUMN IF NOT EXISTS assigned_to uuid;
+      ALTER TABLE operations ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'PENDING';
+      ALTER TABLE operations ADD COLUMN IF NOT EXISTS due_date date;
+      ALTER TABLE operations ADD COLUMN IF NOT EXISTS notes text;
+      ALTER TABLE operations ADD COLUMN IF NOT EXISTS completed_at timestamptz;
+      ALTER TABLE operations ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
     `).then(() => undefined).catch((error) => {
       schemaReady = null;
       throw error;
