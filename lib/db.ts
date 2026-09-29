@@ -17,6 +17,27 @@ async function ensureApprovalSchema() {
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS transaction_type text NOT NULL DEFAULT 'INITIAL_DEPOSIT';
       ALTER TABLE expenses ADD COLUMN IF NOT EXISTS transaction_reference text;
       ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS transaction_reference text;
+      CREATE TABLE IF NOT EXISTS site_records (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        sale_id uuid NOT NULL,
+        record_type text NOT NULL,
+        details jsonb NOT NULL DEFAULT '{}',
+        status text NOT NULL DEFAULT 'DONE',
+        created_by uuid,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE TABLE IF NOT EXISTS operations (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        sale_id uuid NOT NULL,
+        task_type text NOT NULL,
+        assigned_to uuid,
+        status text NOT NULL DEFAULT 'PENDING',
+        due_date date,
+        notes text,
+        completed_at timestamptz,
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
     `).then(() => undefined).catch((error) => {
       schemaReady = null;
       throw error;
