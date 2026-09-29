@@ -1,6 +1,7 @@
 /**
  * Beta SMS (betasms.com) HTTP API:
- *   GET https://login.betasms.com/api/?username=&password=&message=&sender=&mobiles=a,b,c
+ *   POST https://login.betasms.com/api/ (application/x-www-form-urlencoded)
+ *   fields: username, password, message, sender, mobiles=a,b,c
  * A successful call returns a body beginning with "OK" (or status code 1701);
  * anything else is treated as a provider error and surfaced to the sender.
  */
@@ -35,7 +36,13 @@ export async function sendBulkSms(mobiles: string[], message: string): Promise<S
     const chunk = mobiles.slice(i, i + MOBILES_PER_REQUEST);
     const params = new URLSearchParams({ username, password, message, sender, mobiles: chunk.join(',') });
     try {
-      const res = await fetch(`${BETASMS_ENDPOINT}?${params.toString()}`, { signal: AbortSignal.timeout(15000), cache: 'no-store' });
+      const res = await fetch(BETASMS_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params.toString(),
+        signal: AbortSignal.timeout(15000),
+        cache: 'no-store',
+      });
       const body = (await res.text()).trim();
       if (res.ok && (/^ok\b/i.test(body) || body.startsWith('1701'))) result.sent += chunk.length;
       else { result.failed += chunk.length; result.errors.push(body.slice(0, 160) || `HTTP ${res.status}`); }
