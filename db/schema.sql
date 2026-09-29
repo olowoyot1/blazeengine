@@ -409,3 +409,20 @@ CREATE TABLE IF NOT EXISTS expense_documents(
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_expense_docs_expense ON expense_documents(expense_id, created_at);
+
+-- v3.4: customer newsletters (Resend) and SMS broadcasts (Beta SMS)
+CREATE TABLE IF NOT EXISTS customer_campaigns (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  channel text NOT NULL CHECK (channel IN ('EMAIL','SMS')),
+  audience text NOT NULL,
+  subject text,
+  body text NOT NULL,
+  status text NOT NULL DEFAULT 'SENDING',
+  recipient_count int NOT NULL DEFAULT 0,
+  sent_count int NOT NULL DEFAULT 0,
+  failed_count int NOT NULL DEFAULT 0,
+  error text,
+  created_by uuid REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  completed_at timestamptz
+);

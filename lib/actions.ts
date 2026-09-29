@@ -6,6 +6,8 @@ import { can } from './rbac';
 import { sql } from './db';
 import { passwordProblem, startSession } from './auth';
 import { sendMail } from './email';
+import { sendBulkSms, normalizeNgPhone, smsConfigured } from './sms';
+import { sendNewsletter, newsletterConfigured } from './newsletter';
 import { WorkflowError, ForbiddenError } from './workflow/core';
 import { decide } from './workflow/approvals';
 import { submitPayroll, disbursePayroll } from './workflow/payroll';
@@ -373,4 +375,52 @@ export async function openDirectChat(userId:string):Promise<Result>{
 export async function updatePayrollItem(id:string, allowances:number, deductions:number):Promise<Result>{
   const s=await requireCap('hr.payroll'); if(s.role!=='SUPER_ADMIN' && !['HR','ADMIN'].includes(s.role))return {error:'Only HR can edit payroll.'};
   try{await sql`update payroll_items i set allowances=${Number(allowances)||0},deductions=${Number(deductions)||0},gross_salary=base_salary+((${Number(allowances)||0})::numeric),net_salary=base_salary+((${Number(allowances)||0})::numeric)-((${Number(deductions)||0})::numeric) from payroll_runs p where i.id=${id}::uuid and p.id=i.payroll_run_id and p.status in ('DRAFT','REJECTED')`;const r=await sql`select payroll_run_id from payroll_items where id=${id}::uuid`;if(r[0])await sql`update payroll_runs p set total_gross=x.gross,total_allowances=x.allowances,total_deductions=x.deductions,total_net=x.net,updated_at=now() from (select payroll_run_id,sum(gross_salary) gross,sum(allowances) allowances,sum(deductions) deductions,sum(net_salary) net from payroll_items where payroll_run_id=${r[0].payroll_run_id} group by payroll_run_id)x where p.id=x.payroll_run_id`;revalidatePath('/hr/payroll');return {ok:true};}catch(e){return toErr(e);}
+}
+
+const CAMPAIGN_AUDIENCES = ['ALL', 'ACTIVE_SALES', 'OWNED_PLOTS'] as const;
+export async function sendCustomerCampaign(input: { channel: string; audience: string; subject?: string; body: string }): Promise<Result> {
+  const s = await requireCap('campaign.send');
+  const channel = input.channel === 'SMS' ? 'SMS' : input.channel === 'EMAIL' ? 'EMAIL' : null;
+  const audience = (CAMPAIGN_AUDIENCES as readonly string[]).includes(input.audience) ? input.audience : null;
+  const body = String(input.body ?? '').trim();
+  const subject = String(input.subject ?? '').trim();
+  if (!channel) return { error: 'Choose email newsletter or SMS.' };
+  if (!audience) return { error: 'Choose who should receive the message.' };
+  if (!body) return { error: 'Write the message first.' };
+  if (channel === 'SMS' && body.length > 918) return { error: 'SMS is too long (maximum 918 characters / 6 pages).' };
+  if (channel === 'EMAIL' && !subject) return { error: 'Add a subject line for the newsletter.' };
+  if (channel === 'EMAIL' && body.length > 20000) return { error: 'Newsletter is too long.' };
+  if (channel === 'SMS' && !smsConfigured()) return { error: 'SMS is not configured yet. Ask the administrator to add the Beta SMS credentials.' };
+  if (channel === 'EMAIL' && !newsletterConfigured()) return { error: 'Newsletter sender is not configured yet. Ask the administrator to add NEWSLETTER_FROM.' };
+
+  try {
+    const clients = await sql`select c.name, c.email, c.phone from clients c
+      where ${audience} = 'ALL'
+        or (${audience} = 'ACTIVE_SALES' and exists (select 1 from sales x where x.client_id=c.id and x.status not in ('CANCELLED','ALLOCATED')))
+        or (${audience} = 'OWNED_PLOTS' and exists (select 1 from sales x where x.client_id=c.id and x.status='ALLOCATED'))`;
+    const seen = new Set<string>();
+    const emails: { email: string; name: string }[] = [];
+    const phones: string[] = [];
+    for (const c of clients) {
+      if (channel === 'EMAIL') {
+        const e = String(c.email ?? '').trim().toLowerCase();
+        if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) && !seen.has(e)) { seen.add(e); emails.push({ email: e, name: c.name }); }
+      } else {
+        const p = normalizeNgPhone(c.phone);
+        if (p && !seen.has(p)) { seen.add(p); phones.push(p); }
+      }
+    }
+    const count = channel === 'EMAIL' ? emails.length : phones.length;
+    if (count === 0) return { error: `No customers in this audience have a valid ${channel === 'EMAIL' ? 'email address' : 'phone number'}.` };
+
+    const [row] = await sql`insert into customer_campaigns(channel, audience, subject, body, recipient_count, created_by)
+      values(${channel}, ${audience}, ${channel === 'EMAIL' ? subject : null}, ${body}, ${count}, ${s.id}::uuid) returning id`;
+    const r = channel === 'EMAIL' ? await sendNewsletter(row.id, emails, subject, body) : await sendBulkSms(phones, body);
+    const status = r.failed === 0 ? 'SENT' : r.sent === 0 ? 'FAILED' : 'PARTIAL';
+    await sql`update customer_campaigns set status=${status}, sent_count=${r.sent}, failed_count=${r.failed},
+      error=${r.errors.length ? r.errors.slice(0, 3).join(' | ') : null}, completed_at=now() where id=${row.id}::uuid`;
+    revalidatePath('/messaging');
+    if (status === 'FAILED') return { error: `Sending failed: ${r.errors[0] ?? 'provider error'}` };
+    return { ok: true, id: row.id };
+  } catch (e) { return toErr(e); }
 }

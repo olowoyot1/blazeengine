@@ -5,15 +5,15 @@ export type Cap =
   | 'sale.read' | 'sale.read_all' | 'sale.create' | 'accounts.workspace' | 'ops.workspace' | 'site.workspace' | 'finance.workspace'
   | 'expense.read' | 'expense.read_all' | 'expense.create_negotiation' | 'approvals.read'
   | 'report.sales' | 'report.hr' | 'report.ops' | 'report.site' | 'report.finance' | 'report.company' | 'report.performance'
-  | 'hr.workspace' | 'hr.payroll' | 'payroll.read' | 'chat.read' | 'users.manage' | 'admins.manage' | 'departments.manage' | 'audit.read';
+  | 'hr.workspace' | 'hr.payroll' | 'payroll.read' | 'chat.read' | 'campaign.send' | 'users.manage' | 'admins.manage' | 'departments.manage' | 'audit.read';
 const ALL_REPORTS: Cap[] = ['report.sales','report.hr','report.ops','report.site','report.finance','report.company','report.performance'];
 export const CAPS: Record<Role, Cap[]> = {
   SUPER_ADMIN: ['lead.read','lead.read_all','lead.write','client.read','client.write','sale.read','sale.read_all','sale.create','accounts.workspace','ops.workspace','site.workspace','finance.workspace','expense.read','expense.read_all','expense.create_negotiation','approvals.read',...ALL_REPORTS,'hr.workspace','hr.payroll','payroll.read','chat.read','users.manage','admins.manage','departments.manage','audit.read'],
-  ADMIN: ['lead.read_all','payroll.read','chat.read','client.read','sale.read_all','expense.read_all','approvals.read',...ALL_REPORTS,'users.manage','departments.manage','audit.read'],
-  CEO: ['lead.read_all','lead.write','payroll.read','chat.read','client.read','client.write','sale.read_all','sale.create','accounts.workspace','ops.workspace','site.workspace','finance.workspace','expense.read_all','expense.create_negotiation','approvals.read',...ALL_REPORTS,'hr.workspace','hr.payroll','audit.read'],
+  ADMIN: ['campaign.send','lead.read_all','payroll.read','chat.read','client.read','sale.read_all','expense.read_all','approvals.read',...ALL_REPORTS,'users.manage','departments.manage','audit.read'],
+  CEO: ['campaign.send','lead.read_all','lead.write','payroll.read','chat.read','client.read','client.write','sale.read_all','sale.create','accounts.workspace','ops.workspace','site.workspace','finance.workspace','expense.read_all','expense.create_negotiation','approvals.read',...ALL_REPORTS,'hr.workspace','hr.payroll','audit.read'],
   HR: ['hr.workspace','hr.payroll','payroll.read','chat.read','lead.read_all','client.read','sale.read_all','expense.read_all','approvals.read',...ALL_REPORTS.filter(c=>c!=='report.company'),'audit.read'],
-  SALES_MANAGER: ['chat.read','lead.read_all','lead.write','client.read','client.write','sale.read_all','sale.create','approvals.read','report.sales'],
-  SALES: ['chat.read','lead.read','lead.write','client.read','client.write','sale.read','sale.create'], MARKETER: ['chat.read','lead.read','lead.write','client.read','client.write'],
+  SALES_MANAGER: ['campaign.send','chat.read','lead.read_all','lead.write','client.read','client.write','sale.read_all','sale.create','approvals.read','report.sales'],
+  SALES: ['chat.read','lead.read','lead.write','client.read','client.write','sale.read','sale.create'], MARKETER: ['campaign.send','chat.read','lead.read','lead.write','client.read','client.write'],
   ACCOUNTANT: ['sale.read','accounts.workspace','payroll.read','chat.read','expense.read_all','report.finance'], FINANCE_OPERATIONS: ['finance.workspace','payroll.read','chat.read','expense.read_all','report.finance'],
   OPERATIONS_MANAGER: ['chat.read','sale.read','ops.workspace','expense.read_all','approvals.read','report.ops'], OPERATIONS: ['chat.read','sale.read','ops.workspace'], SITE_MANAGER: ['chat.read','sale.read','site.workspace','expense.read','expense.create_negotiation','report.site'],
 };
@@ -27,7 +27,7 @@ export type NavItem={href:string;label:string;cap:Cap[];mode:'view'|'action'|'bo
 export type NavGroup={label:string;items:NavItem[]};
 export const NAV_GROUPS:NavGroup[]=[
  {label:'General',items:[{href:'/dashboard',label:'Dashboard',cap:[],mode:'view'},{href:'/approvals',label:'Approvals',cap:['approvals.read'],mode:'both'},{href:'/reports',label:'Company Reports',cap:ALL_REPORTS,mode:'view'},{href:'/chat',label:'Staff Chat',cap:['chat.read'],mode:'both'},{href:'/notifications',label:'Notifications',cap:[],mode:'view'}]},
- {label:'Sales & Marketing',items:[{href:'/leads',label:'Leads',cap:['lead.read','lead.read_all'],mode:'both'},{href:'/clients',label:'Customers / Clients',cap:['client.read'],mode:'both'},{href:'/sales',label:'Sales',cap:['sale.read','sale.read_all'],mode:'both'}]},
+ {label:'Sales & Marketing',items:[{href:'/leads',label:'Leads',cap:['lead.read','lead.read_all'],mode:'both'},{href:'/clients',label:'Customers / Clients',cap:['client.read'],mode:'both'},{href:'/sales',label:'Sales',cap:['sale.read','sale.read_all'],mode:'both'},{href:'/messaging',label:'Newsletters & SMS',cap:['campaign.send'],mode:'both'}]},
  {label:'Accounts & Finance Operations',items:[{href:'/accounts',label:'Accounts',cap:['accounts.workspace'],mode:'both'},{href:'/expenses',label:'Expenses & Payments',cap:['expense.read','expense.read_all','finance.workspace'],mode:'both'}]},
  {label:'Operations',items:[{href:'/operations',label:'Operations',cap:['ops.workspace'],mode:'both'}]},
  {label:'Site Management',items:[{href:'/site-management',label:'Site Management',cap:['site.workspace'],mode:'both'}]},
