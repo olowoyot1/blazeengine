@@ -24,10 +24,10 @@ export const ALLOCATION_WINDOW_DAYS = 30; // allocation date / ops docs "within 
 
 /** Ordered sale lifecycle. RETURNED/CANCELLED sit outside the happy path. */
 export const SALE_STATUS_LABEL: Record<string, string> = {
-  PENDING_SALES_APPROVAL: 'Pending Sales Manager approval',
+  PENDING_SALES_APPROVAL: 'Pending manager approval',
   DRAFT: 'Approved for payment proof',
   PAYMENT_PROOF_SUBMITTED: 'Payment proof submitted',
-  INVOICE_ENTERED: 'Invoice entered · awaiting Sales Manager',
+  INVOICE_ENTERED: 'Invoice entered · awaiting manager approval',
   SALES_APPROVED: 'Approved sale · awaiting sale documents',
   CONTRACT_PREPARED: 'Sale documents ready · awaiting Accounts',
   ACCOUNT_DOCS_SENT: 'Sales documents sent · awaiting Operations',

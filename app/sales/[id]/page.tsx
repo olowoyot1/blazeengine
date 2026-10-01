@@ -64,7 +64,7 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
         </div>
       </div>
 
-      {sale.status === 'PENDING_SALES_APPROVAL' && (s.role === 'SALES_MANAGER' || s.role === 'SUPER_ADMIN') && (
+      {sale.status === 'PENDING_SALES_APPROVAL' && (s.role === 'SALES_MANAGER' || s.role === 'OPERATIONS_MANAGER' || s.role === 'SUPER_ADMIN') && (
         <div className="card" style={{ marginTop: 15 }}>
           <h3>Edit sale before approval</h3>
           <p className="muted small">Adjust the commercial details if needed, then review the updated overview and approve the sale.</p>
