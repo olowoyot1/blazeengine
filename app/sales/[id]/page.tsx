@@ -9,6 +9,7 @@ import { availableSaleActions } from '@/lib/workflow/sale';
 import { SALE_STATUS_ORDER, SALE_STATUS_LABEL } from '@/lib/constants';
 import { SaleActionPanel } from './SaleActionPanel';
 import { EditSaleForm } from './EditSaleForm';
+import { DeleteTransaction } from '@/components/DeleteTransaction';
 
 const MAIN_LINE = ['PENDING_SALES_APPROVAL', 'DRAFT', 'PAYMENT_PROOF_SUBMITTED', 'INVOICE_ENTERED', 'SALES_APPROVED', 'CONTRACT_PREPARED', 'ACCOUNT_DOCS_SENT', 'SITE_NOTIFIED', 'OPS_DOCS_UPLOADED', 'IN_APPROVAL', 'FULLY_APPROVED', 'PRE_ALLOCATION', 'ALLOCATION_SCHEDULED', 'ALLOCATED'];
 
@@ -119,6 +120,10 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
             {e.notes && <div className="muted small">{e.notes}</div>}</li>
         ))}</ul>
       </div>
+
+      {(s.role === 'ADMIN' || s.role === 'SUPER_ADMIN') && (
+        <DeleteTransaction kind="SALE" id={sale.id} label={`sale ${sale.sale_reference || ''} for ${sale.client_name}`} />
+      )}
     </Shell>
   );
 }
