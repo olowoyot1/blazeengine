@@ -167,6 +167,43 @@ export async function buildInvoicePdf(d: SaleDocInput): Promise<Uint8Array> {
   return pdf.save();
 }
 
+/** Sales order for installment plans, carrying the full estate value and balance schedule. */
+export async function buildSalesOrderPdf(d: SaleDocInput): Promise<Uint8Array> {
+  const { pdf, page, f } = await setup(`Sales order ${d.invoiceNo}`);
+  const [w] = A4;
+  let y = header(page, f, 'SALES ORDER', d.invoiceNo, d.issuedAt);
+  const top = y;
+  const leftEnd = party(page, f, 'IN FAVOUR OF (PROPERTY BENEFICIARY)', d, y, 'Purchaser');
+  const rightEnd = details(page, f, [
+    ['Sale reference', d.saleReference], ['Transaction type', d.transactionType],
+    ['Payment plan', 'INSTALLMENT'], ['Payment reference', d.paymentReference],
+  ], top);
+  y = Math.min(leftEnd, rightEnd) - 30;
+  page.drawRectangle({ x: M, y: y - 6, width: w - 2 * M, height: 24, color: TINT });
+  text(page, 'DESCRIPTION', M + 10, y + 2, f.bold, 9, BRAND);
+  right(page, 'AMOUNT', w - M - 10, y + 2, f.bold, 9, BRAND);
+  y -= 30;
+  const desc = wrap(`Full estate value - ${propertyLabel(d)}`, f.reg, 10, w - 2 * M - 160);
+  desc.forEach((line, idx) => text(page, line, M + 10, y - idx * 13, idx ? f.reg : f.bold, 10));
+  right(page, ngn(d.estateValue), w - M - 10, y, f.bold, 10);
+  y -= desc.length * 13 + 14;
+  page.drawLine({ start: { x: M, y }, end: { x: w - M, y }, thickness: 1, color: RULE });
+  const balance = Math.max(d.estateValue - d.amountPaid, 0);
+  const tx = w / 2 + 20;
+  y -= 22;
+  text(page, 'Full estate value', tx, y, f.reg, 10, MUTED); right(page, ngn(d.estateValue), w - M - 10, y, f.reg, 10);
+  y -= 18;
+  text(page, 'Amount paid to date', tx, y, f.reg, 10, MUTED); right(page, ngn(d.amountPaid), w - M - 10, y, f.reg, 10);
+  y -= 14;
+  page.drawRectangle({ x: tx - 10, y: y - 26, width: w - M - tx + 10, height: 28, color: BRAND });
+  text(page, 'BALANCE TO PAY', tx, y - 17, f.bold, 10, rgb(1, 1, 1));
+  right(page, ngn(balance), w - M - 10, y - 17, f.bold, 11, rgb(1, 1, 1));
+  y -= 60;
+  text(page, `Payment received is acknowledged on sales receipt ${d.receiptNo}.`, M, y, f.reg, 10, MUTED);
+  footer(page, f, 'This sales order records the agreed full estate value for an installment purchase. Title documents are released only after the full estate value has been paid and the sale has been approved.', d.issuedBy);
+  return pdf.save();
+}
+
 /** Sales receipt for the amount actually paid. */
 export async function buildReceiptPdf(d: SaleDocInput): Promise<Uint8Array> {
   const { pdf, page, f } = await setup(`Sales receipt ${d.receiptNo}`);
