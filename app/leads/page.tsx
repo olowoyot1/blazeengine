@@ -1,6 +1,7 @@
 import Shell from '@/components/Shell';
 import Link from 'next/link';
 import { requireCap } from '@/lib/guard';
+import { can } from '@/lib/rbac';
 import { listLeads, listClients, leadsToday } from '@/lib/queries';
 import { DAILY_LEAD_TARGET } from '@/lib/constants';
 import { fmtDateTime } from '@/lib/format';
@@ -23,7 +24,7 @@ export default async function Leads() {
         {today.length === 0 && <div className="card stat"><div className="label">Daily target</div><h2>{DAILY_LEAD_TARGET}</h2><div className="muted">leads per marketer</div></div>}
       </div>
 
-      <div className="card" id="new"><h3>Add a lead</h3><NewLeadForm /></div>
+      {can(s.role, 'lead.write') && <div className="card" id="new"><h3>Add a lead</h3><NewLeadForm /></div>}
 
       <div className="card" style={{ marginTop: 15 }}>
         <div className="table-wrap"><table className="table">
@@ -39,7 +40,7 @@ export default async function Leads() {
           <tbody>{clients.map((c: any) => (
             <tr key={c.id}><td>{c.name}</td><td>{c.phone || '—'}</td><td>{c.email || '—'}</td><td>{c.sales_count}</td>
               <td>{c.profile_completed_at ? <span className="badge green">Complete</span> : <span className="badge yellow">Incomplete</span>}</td>
-              <td><div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}><Link className="btn light" href={`/clients/${c.id}`}>Open</Link><Link className="btn" href={`/sales?client_id=${encodeURIComponent(c.id)}#new`}>Fresh sale</Link></div></td></tr>
+              <td><div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}><Link className="btn light" href={`/clients/${c.id}`}>Open</Link>{can(s.role, 'sale.create') && <Link className="btn" href={`/sales?client_id=${encodeURIComponent(c.id)}#new`}>Fresh sale</Link>}</div></td></tr>
           ))}</tbody>
         </table></div>
       </div>
