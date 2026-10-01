@@ -5,7 +5,7 @@
  *  DRAFT ──submit_payment_proof──▶ PAYMENT_PROOF_SUBMITTED        Sales team uploads payment proof
  *  ──enter_invoice──▶ INVOICE_ENTERED                             Accountant generates invoice (auto no., payment amount) → back to Sales
  *  ──approve_sale──▶ SALES_APPROVED                               Sales Manager approves → Operations receives approved sale
- *  ──create_contract──▶ CONTRACT_PREPARED                         Operations: contract + acknowledgment + sales bundle → back to Accounts
+ *  ──create_contract──▶ CONTRACT_PREPARED                         Operations: contract + acknowledgment → back to Accounts
  *  ──send_sales_documents──▶ ACCOUNT_DOCS_SENT                    Accountant: sales order, receipt, invoice sent
  *  ──open_ops_portal──▶ SITE_NOTIFIED                             Operations opens portal → Site Manager notified, ready for allocation (30-day clock)
  *  ──upload_deed_of_assignment──▶ OPS_DEED_UPLOADED               Operations: deed of assignment
@@ -207,7 +207,7 @@ export const SALE_ACTIONS: SaleAction[] = [
       // sale twice under two different hats.
       await ctx.tx.query(`update sales set gate_approved_by=$2 where id=$1`, [s.id, ctx.actor.id]);
       await openTask(ctx, s.id, 'SALE_DOCUMENTS');
-      const n = { title: 'Approved sale received', message: `${saleLabel(s)}. Create the Contract of Sale, Letter of Acknowledgment and Sales Documents bundle.`, link: saleLink(s) };
+      const n = { title: 'Approved sale received', message: `${saleLabel(s)}. Create the Contract of Sale and Letter of Acknowledgment.`, link: saleLink(s) };
       await notifyRoles(ctx, OPS, n);
       await notifyUsers(ctx, [s.created_by], { ...n, title: 'Your sale was approved', message: `${saleLabel(s)} is with Operations.` });
     },
@@ -226,18 +226,16 @@ export const SALE_ACTIONS: SaleAction[] = [
   },
   {
     key: 'create_contract', label: 'Create sale documents',
-    help: 'Operations prepares the Contract of Sale, Letter of Acknowledgment and Sales Documents bundle. On submission the sale goes back to Accounts.',
+    help: 'Operations prepares the Contract of Sale and Letter of Acknowledgment. On submission the sale goes back to Accounts.',
     roles: OPS, from: ['SALES_APPROVED'], to: 'CONTRACT_PREPARED',
     fields: [
       { name: 'contract_url', label: 'Contract of Sale', type: 'file', required: true },
       { name: 'acknowledgment_url', label: 'Letter of Acknowledgment', type: 'file', required: true },
-      { name: 'sales_documents_url', label: 'Sales Documents bundle', type: 'file', required: true },
     ],
     async apply(ctx, s, i) {
       if (s.transaction_type === 'TOP_UP') throw new WorkflowError('Top-up transactions do not receive sale documents');
       await addDoc(ctx, s.id, 'CONTRACT', i.contract_url, 'Contract of Sale');
       await addDoc(ctx, s.id, 'ACKNOWLEDGMENT_LETTER', i.acknowledgment_url, 'Letter of Acknowledgment');
-      await addDoc(ctx, s.id, 'SALES_DOCUMENTS', i.sales_documents_url, 'Sales Documents bundle');
       await closeTasks(ctx, s.id, 'SALE_DOCUMENTS');
       const originator = await one(ctx, `select id, role from users where id=$1 and active=true`, [s.created_by]);
       if (!originator) throw new WorkflowError('The sales originator is no longer active and cannot approve these documents');
@@ -247,7 +245,7 @@ export const SALE_ACTIONS: SaleAction[] = [
         { step: 'Sales Manager approval', role: 'SALES_MANAGER', seq: 2, userId: undefined },
       ];
       await openRound(ctx, 'SALE', s.id, 'SALE_DOCUMENTS_APPROVAL', Number(s.chain_round || 0) + 1, steps);
-      await notifyUsers(ctx, [s.created_by], { title: 'Operations documents ready for your approval', message: `${saleLabel(s)} — review the Contract of Sale, Letter of Acknowledgment and Sales Documents bundle.`, link: saleLink(s) });
+      await notifyUsers(ctx, [s.created_by], { title: 'Operations documents ready for your approval', message: `${saleLabel(s)} — review the Contract of Sale and Letter of Acknowledgment.`, link: saleLink(s) });
       await notifyRoles(ctx, ['SALES_MANAGER'], { title: 'Operations documents awaiting approval', message: `${saleLabel(s)} — review the three documents submitted by Operations.`, link: saleLink(s) });
     },
   },
