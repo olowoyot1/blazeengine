@@ -24,6 +24,21 @@ async function ensureApprovalSchema() {
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS invoice_number text;
       CREATE SEQUENCE IF NOT EXISTS invoice_number_seq;
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS approved_at timestamptz;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS beneficiary_name text;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS beneficiary_phone text;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS beneficiary_email text;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS beneficiary_address text;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS beneficiary_relationship text;
+      CREATE TABLE IF NOT EXISTS sale_beneficiary_changes (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        sale_id uuid NOT NULL,
+        previous jsonb NOT NULL DEFAULT '{}',
+        current jsonb NOT NULL DEFAULT '{}',
+        reason text NOT NULL,
+        changed_by uuid,
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS sale_beneficiary_changes_sale_idx ON sale_beneficiary_changes(sale_id, created_at);
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS allocation_date date;
       ALTER TABLE expenses ADD COLUMN IF NOT EXISTS negotiated_amount numeric;
       ALTER TABLE expenses ADD COLUMN IF NOT EXISTS paid_at timestamptz;

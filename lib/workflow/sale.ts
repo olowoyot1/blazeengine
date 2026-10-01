@@ -57,7 +57,7 @@ async function storePdf(ctx: Ctx, filename: string, bytes: Uint8Array) {
   return `/api/files/${row.id}`;
 }
 /** Generates the physical invoice (full estate value) and sales receipt (amount paid) and files them on the sale. */
-async function attachInvoiceAndReceipt(ctx: Ctx, s: Row, invoiceNo: string, paid: number) {
+async function attachInvoiceAndReceipt(ctx: Ctx, s: Row, invoiceNo: string, paid: number, reissued = false) {
   const estateValue = Number(s.estate_value ?? s.quoted_amount ?? 0);
   if (!(estateValue > 0)) throw new WorkflowError('No estate value is recorded on this sale — ask Sales to set the estate value before generating the invoice');
   const client = s.client_id ? await one(ctx, `select phone, email, address from clients where id=$1`, [s.client_id]) : undefined;
@@ -67,13 +67,16 @@ async function attachInvoiceAndReceipt(ctx: Ctx, s: Row, invoiceNo: string, paid
     invoiceNo, receiptNo, issuedAt: new Date(),
     clientName: String(s.client_name ?? 'Client'),
     clientEmail: s.client_email ?? client?.email, clientPhone: client?.phone, clientAddress: client?.address,
+    beneficiaryName: s.beneficiary_name, beneficiaryPhone: s.beneficiary_phone, beneficiaryEmail: s.beneficiary_email,
+    beneficiaryAddress: s.beneficiary_address, beneficiaryRelationship: s.beneficiary_relationship,
     propertyName: s.property_name, plotReference: s.plot_reference, saleReference: s.sale_reference,
     transactionType: s.transaction_type, paymentPlan: s.payment_plan, paymentReference: s.payment_reference,
     estateValue, amountPaid: paid, issuedBy: String(actor?.name ?? 'Accounts'),
   };
   const [invoicePdf, receiptPdf] = await Promise.all([buildInvoicePdf(input), buildReceiptPdf(input)]);
-  await addDoc(ctx, s.id, 'INVOICE', await storePdf(ctx, `${invoiceNo}.pdf`, invoicePdf), `Invoice ${invoiceNo}`);
-  await addDoc(ctx, s.id, 'SALES_RECEIPT', await storePdf(ctx, `${receiptNo}.pdf`, receiptPdf), `Sales receipt ${receiptNo}`);
+  const suffix = reissued ? ` (reissued to ${s.beneficiary_name})` : '';
+  await addDoc(ctx, s.id, 'INVOICE', await storePdf(ctx, `${invoiceNo}.pdf`, invoicePdf), `Invoice ${invoiceNo}${suffix}`);
+  await addDoc(ctx, s.id, 'SALES_RECEIPT', await storePdf(ctx, `${receiptNo}.pdf`, receiptPdf), `Sales receipt ${receiptNo}${suffix}`);
 }
 async function siteRecord(ctx: Ctx, saleId: string, type: string, details: object) {
   await ctx.tx.query(`insert into site_records(sale_id,record_type,details,created_by) values($1,$2,$3,$4)`,
@@ -497,6 +500,7 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
   { name: 'description', label: 'Description', type: 'textarea' },
     { name: 'payment_proof_url', label: 'Payment evidence', type: 'file', uploadPurpose: 'sales_payment_evidence' },
     { name: 'payment_reference', label: 'Payment reference', type: 'text' },
+    ...BENEFICIARY_FIELDS,
   ], input);
   if (p.payment_proof_url && !p.payment_reference) throw new WorkflowError('Payment reference is required when payment evidence is uploaded');
   return run(actor, async ctx => {
@@ -512,9 +516,11 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
     }
     const paymentStatus = p.payment_proof_url ? 'PROOF_SUBMITTED' : 'UNPAID';
     const s = (await one(ctx,
-`insert into sales(sale_reference,transaction_type,client_id,lead_id,client_name,client_email,property_name,plot_reference,amount,estate_value,payment_amount,quoted_amount,payment_plan,description,status,payment_status,payment_reference,created_by)
-  values('SALE-' || to_char(now(), 'YYYYMM') || '-' || lpad(nextval('sale_reference_seq')::text, 6, '0'), $1, $2,(select id from leads where client_id=$2 limit 1),$3,$4,$5,$6,$7,$8,$9,$7,$10,$11,'DRAFT',$12,$13,$14) returning id, sale_reference`,
-  [p.transaction_type, client.id, client.name, client.email, p.property_name, p.plot_reference, p.estate_value, p.estate_value, p.payment_amount, p.payment_plan, p.description, paymentStatus, p.payment_reference ?? null, actor.id]))!;
+`insert into sales(sale_reference,transaction_type,client_id,lead_id,client_name,client_email,property_name,plot_reference,amount,estate_value,payment_amount,quoted_amount,payment_plan,description,status,payment_status,payment_reference,created_by,
+    beneficiary_name,beneficiary_phone,beneficiary_email,beneficiary_address,beneficiary_relationship)
+  values('SALE-' || to_char(now(), 'YYYYMM') || '-' || lpad(nextval('sale_reference_seq')::text, 6, '0'), $1, $2,(select id from leads where client_id=$2 limit 1),$3,$4,$5,$6,$7,$8,$9,$7,$10,$11,'DRAFT',$12,$13,$14,$15,$16,$17,$18,$19) returning id, sale_reference`,
+  [p.transaction_type, client.id, client.name, client.email, p.property_name, p.plot_reference, p.estate_value, p.estate_value, p.payment_amount, p.payment_plan, p.description, paymentStatus, p.payment_reference ?? null, actor.id,
+    p.beneficiary_name, p.beneficiary_phone, p.beneficiary_email ?? null, p.beneficiary_address ?? null, p.beneficiary_relationship ?? null]))!;
     if (p.payment_proof_url) {
       const m = String(p.payment_proof_url).match(/^\/api\/files\/([0-9a-f-]{36})$/i)!;
       await ctx.tx.query(`insert into sale_documents(sale_id,document_type,document_name,document_url,uploaded_file_id,uploaded_by) values($1,'PAYMENT_PROOF','Payment evidence',$2,$3::uuid,$4)`, [s.id, p.payment_proof_url, m[1], actor.id]);
@@ -523,6 +529,50 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
   await audit(ctx, 'SALE_CREATED', 'SALE', s.id, { client: client.name, status: 'DRAFT', payment_evidence_attached: !!p.payment_proof_url });
   await notifyUsers(ctx, [actor.id], { title: 'Sale saved as draft', message: `${client.name} — ${p.property_name} / ${p.plot_reference} is saved as a draft. Submit it for Sales Manager approval when ready.`, link: saleLink(s.id) });
     return s.id as string;
+  });
+}
+
+export const BENEFICIARY_FIELDS: Field[] = [
+  { name: 'beneficiary_name', label: 'Beneficiary full name', type: 'text', required: true },
+  { name: 'beneficiary_phone', label: 'Beneficiary phone', type: 'text', required: true },
+  { name: 'beneficiary_email', label: 'Beneficiary email', type: 'text' },
+  { name: 'beneficiary_address', label: 'Beneficiary address', type: 'textarea' },
+  { name: 'beneficiary_relationship', label: 'Relationship to client', type: 'text' },
+];
+const BENEFICIARY_EDITORS: Role[] = ['SALES', 'SALES_MANAGER', 'OPERATIONS_MANAGER'];
+
+export function canChangeBeneficiary(sale: Row, actor: Actor) {
+  if (sale.status === 'CANCELLED' || sale.status === 'ALLOCATED') return false;
+  if (actor.role === 'SUPER_ADMIN') return true;
+  if (!BENEFICIARY_EDITORS.includes(actor.role)) return false;
+  return actor.role !== 'SALES' || sale.created_by === actor.id;
+}
+
+/** Replaces the property beneficiary, keeps an audit trail and reissues any invoice/receipt in the new beneficiary's favour. */
+export async function changeBeneficiary(actor: Actor, saleId: string, input: Record<string, unknown>) {
+  const p = parseFields([...BENEFICIARY_FIELDS, reason], input);
+  return run(actor, async ctx => {
+    const s = await one(ctx, `select * from sales where id=$1 for update`, [saleId]);
+    if (!s) throw new WorkflowError('Sale not found');
+    if (!canChangeBeneficiary(s, actor)) throw new ForbiddenError(s.status === 'CANCELLED' || s.status === 'ALLOCATED'
+      ? `The beneficiary cannot be changed while the sale is "${SALE_STATUS_LABEL[s.status] ?? s.status}"`
+      : 'Your role is not permitted to change the beneficiary on this sale');
+    const pick = (r: Row) => ({ name: r.beneficiary_name ?? null, phone: r.beneficiary_phone ?? null, email: r.beneficiary_email ?? null, address: r.beneficiary_address ?? null, relationship: r.beneficiary_relationship ?? null });
+    const previous = pick(s);
+    const updated = (await one(ctx,
+      `update sales set beneficiary_name=$2, beneficiary_phone=$3, beneficiary_email=$4, beneficiary_address=$5, beneficiary_relationship=$6, updated_at=now() where id=$1 returning *`,
+      [saleId, p.beneficiary_name, p.beneficiary_phone, p.beneficiary_email ?? null, p.beneficiary_address ?? null, p.beneficiary_relationship ?? null]))!;
+    await ctx.tx.query(`insert into sale_beneficiary_changes(sale_id, previous, current, reason, changed_by) values($1,$2,$3,$4,$5)`,
+      [saleId, JSON.stringify(previous), JSON.stringify(pick(updated)), p.reason, actor.id]);
+    const reissue = !!updated.invoice_number;
+    if (reissue) await attachInvoiceAndReceipt(ctx, updated, String(updated.invoice_number), Number(updated.payment_amount ?? updated.amount ?? 0), true);
+    const notes = `${previous.name || 'No beneficiary'} → ${p.beneficiary_name}. Reason: ${p.reason}${reissue ? ' · invoice and receipt reissued' : ''}`;
+    await logEvent(ctx, 'SALE', saleId, 'SALES', 'Property beneficiary changed', s.status, s.status, notes);
+    await audit(ctx, 'SALE_BENEFICIARY_CHANGED', 'SALE', saleId, { previous, current: pick(updated), reason: p.reason });
+    const n = { title: 'Property beneficiary changed', message: `${saleLabel(s)} — ${notes}`, link: saleLink(saleId) };
+    await notifyRoles(ctx, ['SALES_MANAGER', 'OPERATIONS_MANAGER', 'ACCOUNTANT'], n);
+    if (s.created_by && s.created_by !== actor.id) await notifyUsers(ctx, [s.created_by], n);
+    return saleId;
   });
 }
 

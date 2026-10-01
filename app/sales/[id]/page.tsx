@@ -5,7 +5,8 @@ import { getSale, listActiveApprovers } from '@/lib/queries';
 import { Badge } from '@/components/Badge';
 import { ApprovalDecisionPanel } from '@/components/ApprovalDecisionPanel';
 import { naira, fmtDateTime, human } from '@/lib/format';
-import { availableSaleActions } from '@/lib/workflow/sale';
+import { availableSaleActions, canChangeBeneficiary } from '@/lib/workflow/sale';
+import { ChangeBeneficiaryForm } from './ChangeBeneficiaryForm';
 import { SALE_STATUS_ORDER, SALE_STATUS_LABEL } from '@/lib/constants';
 import { SaleActionPanel } from './SaleActionPanel';
 import { EditSaleForm } from './EditSaleForm';
@@ -18,7 +19,7 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
   const s = await requireCap('sale.read', 'sale.read_all');
   const [data, approvers] = await Promise.all([getSale(s, id), listActiveApprovers()]);
   if (!data) notFound();
-  const { sale, docs, events, approvals, records, tasks, actionableApproval } = data;
+  const { sale, docs, events, approvals, records, tasks, actionableApproval, beneficiaryChanges } = data;
   const approverOptions = (role: string) => approvers.filter((u: any) => u.role === role).map((u: any) => `${u.id} — ${u.name}`);
   const actions = availableSaleActions(sale as any, s).map(a => ({
     key: a.key, label: a.label, help: a.help, danger: a.danger,
@@ -46,6 +47,7 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
           <div className="section-title"><h3>Overview</h3><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span className="badge">{sale.sale_reference || 'Reference pending'}</span><Badge status={sale.status} label={SALE_STATUS_LABEL[sale.status] ?? sale.status} /></div></div>
           <table className="table"><tbody>
             <tr><td className="muted">Client</td><td>{sale.client_name} {sale.client_email ? `(${sale.client_email})` : ''}</td></tr>
+            <tr><td className="muted">Property beneficiary</td><td>{sale.beneficiary_name ? <><b>{sale.beneficiary_name}</b>{sale.beneficiary_relationship ? ` (${sale.beneficiary_relationship})` : ''}{sale.beneficiary_phone ? ` · ${sale.beneficiary_phone}` : ''}{sale.beneficiary_email ? ` · ${sale.beneficiary_email}` : ''}</> : <span className="muted">Not set — documents default to the client</span>}</td></tr>
             <tr><td className="muted">Property / Plot</td><td>{sale.property_name || '—'} / {sale.plot_reference || '—'}</td></tr>
             <tr><td className="muted">Estate value</td><td>{naira(sale.estate_value ?? sale.quoted_amount ?? sale.amount)}</td></tr>
             <tr><td className="muted">Transaction</td><td>{sale.transaction_type === 'TOP_UP' ? 'Top-up' : 'Initial deposit'} · {naira(sale.payment_amount ?? sale.amount)} · {sale.payment_plan === 'INSTALLMENT' ? 'Installment' : sale.payment_plan === 'OUTRIGHT' ? 'Outright' : '—'} · <Badge status={sale.payment_status} label={(sale.payment_status || 'PENDING').replace(/_/g, ' ')} /> {sale.payment_reference || ''}</td></tr>
@@ -71,6 +73,21 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
           <EditSaleForm sale={sale as any} />
         </div>
       )}
+
+      <div className="card" style={{ marginTop: 15 }}>
+        <h3>Property beneficiary</h3>
+        <p className="muted small">All documents for this sale are prepared in favour of the beneficiary.{sale.beneficiary_address ? ` Address: ${sale.beneficiary_address}` : ''}</p>
+        {canChangeBeneficiary(sale as any, s) && <ChangeBeneficiaryForm saleId={sale.id} current={sale as any} hasInvoice={!!sale.invoice_number} />}
+        {beneficiaryChanges.length > 0 && (
+          <>
+            <h4 style={{ marginTop: 14 }}>Change history</h4>
+            <ul className="timeline">{beneficiaryChanges.map((b: any) => (
+              <li key={b.id}><b>{b.previous?.name || 'No beneficiary'} → {b.current?.name}</b>
+                <div className="muted small">{b.changed_by_name || 'System'} · {fmtDateTime(b.created_at)} · {b.reason}</div></li>
+            ))}</ul>
+          </>
+        )}
+      </div>
 
       <ApprovalDecisionPanel approval={actionableApproval} />
 

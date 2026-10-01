@@ -27,15 +27,16 @@ export async function getSale(u: U, id: string) {
     where s.id=${id}::uuid and (${sc.all}::boolean or (${sc.own}::boolean and s.created_by=${sc.uid}::uuid) or s.status = any(${sc.statuses}::text[]))`;
   const sale = rows[0];
   if (!sale) return null;
-  const [docs, events, approvals, records, tasks, actionableApproval] = await Promise.all([
+  const [docs, events, approvals, records, tasks, actionableApproval, beneficiaryChanges] = await Promise.all([
     sql`select d.*, u.name uploader from sale_documents d left join users u on u.id=d.uploaded_by where d.sale_id=${id}::uuid order by d.created_at`,
     sql`select e.*, u.name actor, u.role actor_role from workflow_events e left join users u on u.id=e.actor_id where e.entity_type='SALE' and e.entity_id=${id}::uuid order by e.created_at desc`,
     sql`select a.*, u.name acted_by_name from approvals a left join users u on u.id=a.acted_by where a.entity_type='SALE' and a.entity_id=${id}::uuid order by a.round_no, a.seq, a.created_at`,
     sql`select r.*, u.name creator from site_records r left join users u on u.id=r.created_by where r.sale_id=${id}::uuid order by r.created_at desc`,
     sql`select * from operations where sale_id=${id}::uuid order by created_at`,
     actionableApprovalForEntity(u, 'SALE', id),
+    sql`select b.*, u.name changed_by_name from sale_beneficiary_changes b left join users u on u.id=b.changed_by where b.sale_id=${id}::uuid order by b.created_at desc`,
   ]);
-  return { sale, docs, events, approvals, records, tasks, actionableApproval };
+  return { sale, docs, events, approvals, records, tasks, actionableApproval, beneficiaryChanges };
 }
 
 export async function listClients(limit = 200) {
