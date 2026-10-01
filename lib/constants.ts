@@ -27,7 +27,7 @@ export const SALE_STATUS_LABEL: Record<string, string> = {
   PENDING_SALES_APPROVAL: 'Pending manager approval',
   DRAFT: 'Approved for payment proof',
   PAYMENT_PROOF_SUBMITTED: 'Payment proof submitted',
-  INVOICE_ENTERED: 'Invoice entered · awaiting manager approval',
+  INVOICE_ENTERED: 'Invoice generated · awaiting Sales approval',
   SALES_APPROVED: 'Approved sale · awaiting sale documents',
   CONTRACT_PREPARED: 'Sale documents ready · awaiting Accounts',
   ACCOUNT_DOCS_SENT: 'Sales documents sent · awaiting Operations',

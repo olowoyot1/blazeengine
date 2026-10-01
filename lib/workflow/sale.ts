@@ -3,7 +3,7 @@
  *
  *  PENDING_SALES_APPROVAL ──approve_new_sale──▶ DRAFT
  *  DRAFT ──submit_payment_proof──▶ PAYMENT_PROOF_SUBMITTED        Sales team uploads payment proof
- *  ──enter_invoice──▶ INVOICE_ENTERED                             Accountant enters invoice → back to Sales Mgr + Sales Exec
+ *  ──enter_invoice──▶ INVOICE_ENTERED                             Accountant generates invoice (auto no., payment amount) → back to Sales
  *  ──approve_sale──▶ SALES_APPROVED                               Sales Manager approves → Operations receives approved sale
  *  ──create_contract──▶ CONTRACT_PREPARED                         Operations: contract + acknowledgment + sales bundle → back to Accounts
  *  ──send_sales_documents──▶ ACCOUNT_DOCS_SENT                    Accountant: sales order, receipt, invoice sent
@@ -134,30 +134,25 @@ export const SALE_ACTIONS: SaleAction[] = [
     },
   },
   {
-    key: 'enter_invoice', label: 'Enter invoice',
-    help: 'Verify the payment and enter the invoice. If the amount differs from the original quote by more than 2%, a reason is required. On submission the sale goes back to the Sales Manager and Sales Executive.',
+    key: 'enter_invoice', label: 'Generate invoice',
+    help: 'Verify the payment, then generate the invoice. The invoice number is assigned automatically and the invoice amount is the payment made (not the property value). The sale is then sent back to Sales for approval.',
     roles: ['ACCOUNTANT', 'FINANCE_OPERATIONS'], from: ['PAYMENT_PROOF_SUBMITTED', 'DRAFT'], to: 'INVOICE_ENTERED',
     fields: [
-      { name: 'invoice_number', label: 'Invoice number', type: 'text', required: true },
-      { name: 'invoice_amount', label: 'Invoice amount (₦)', type: 'number', required: true, min: 1 },
-      { name: 'invoice_url', label: 'Invoice document (optional)', type: 'file' },
-      { name: 'variance_reason', label: 'Reason for amount differing from the original quote (if applicable)', type: 'textarea' },
+      { name: 'note', label: 'Note to Sales (optional)', type: 'textarea' },
     ],
     async apply(ctx, s, i) {
-      const dup = await one(ctx, `select 1 from sales where invoice_number=$1 and id<>$2 and status<>'CANCELLED' limit 1`, [i.invoice_number, s.id]);
-      if (dup) throw new WorkflowError(`Invoice number ${i.invoice_number} is already used on another active sale`);
-      const quoted = Number(s.quoted_amount ?? s.amount);
-      const varianceRatio = quoted > 0 ? Math.abs(Number(i.invoice_amount) - quoted) / quoted : 0;
-      if (varianceRatio > 0.02 && !i.variance_reason)
-        throw new WorkflowError(`Invoice amount differs from the original quote (${money(quoted)}) by ${(varianceRatio * 100).toFixed(1)}% — a reason is required`);
-      await ctx.tx.query(`update sales set invoice_number=$2, amount=$3, payment_status='VERIFIED', invoice_variance_reason=$4 where id=$1`,
-        [s.id, i.invoice_number, i.invoice_amount, i.variance_reason ?? null]);
-      await addDoc(ctx, s.id, 'INVOICE', i.invoice_url, `Invoice ${i.invoice_number}`);
-      const flag = varianceRatio > 0.02 ? ` ⚠ differs from the original quote of ${money(quoted)} (${i.variance_reason})` : '';
-      const n = { title: 'Invoice entered – sale awaiting approval', message: `${saleLabel(s)} — ${money(i.invoice_amount)} (invoice ${i.invoice_number}).${flag}`, link: saleLink(s) };
+      const paid = Number(s.payment_amount ?? 0);
+      if (!(paid > 0)) throw new WorkflowError('No payment amount is recorded on this sale — ask Sales to update the payment amount before generating the invoice');
+      if (s.invoice_number) throw new WorkflowError(`Invoice ${s.invoice_number} has already been generated for this sale`);
+      const gen = (await one(ctx, `select 'INV-' || to_char(now(), 'YYYYMM') || '-' || lpad(nextval('invoice_number_seq')::text, 6, '0') as no`, []))!;
+      const invoiceNo = String(gen.no);
+      await ctx.tx.query(`update sales set invoice_number=$2, amount=$3, payment_status='VERIFIED', invoice_variance_reason=null where id=$1`,
+        [s.id, invoiceNo, paid]);
+      const note = i.note ? ` Note: ${i.note}` : '';
+      const n = { title: 'Invoice generated – sale awaiting approval', message: `${saleLabel(s)} — invoice ${invoiceNo} for ${money(paid)} (payment made).${note}`, link: saleLink(s) };
       await notifyRoles(ctx, SALE_APPROVERS, n);
       await notifyUsers(ctx, [s.created_by], n);
-      return `Invoice ${i.invoice_number} · ${money(i.invoice_amount)}${flag}`;
+      return `Invoice ${invoiceNo} generated · ${money(paid)}${note}`;
     },
   },
   {
