@@ -8,6 +8,11 @@ export type SaleDocInput = {
   clientEmail?: string | null;
   clientPhone?: string | null;
   clientAddress?: string | null;
+  beneficiaryName?: string | null;
+  beneficiaryPhone?: string | null;
+  beneficiaryEmail?: string | null;
+  beneficiaryAddress?: string | null;
+  beneficiaryRelationship?: string | null;
   propertyName?: string | null;
   plotReference?: string | null;
   saleReference?: string | null;
@@ -69,13 +74,22 @@ function header(page: PDFPage, f: Fonts, title: string, number: string, issuedAt
   return h - 148;
 }
 
-function party(page: PDFPage, f: Fonts, label: string, d: SaleDocInput, y: number) {
+/** Documents are always issued in favour of the property beneficiary; the paying client is shown underneath. */
+function party(page: PDFPage, f: Fonts, label: string, d: SaleDocInput, y: number, payerLabel: string) {
+  const beneficiary = d.beneficiaryName?.trim() || d.clientName;
+  const lines = d.beneficiaryName?.trim()
+    ? [d.beneficiaryAddress, d.beneficiaryEmail, d.beneficiaryPhone]
+    : [d.clientAddress, d.clientEmail, d.clientPhone];
   text(page, label, M, y, f.bold, 9, MUTED);
   let yy = y - 16;
-  text(page, d.clientName, M, yy, f.bold, 12);
-  for (const line of [d.clientAddress, d.clientEmail, d.clientPhone].filter(Boolean)) {
+  text(page, beneficiary, M, yy, f.bold, 12);
+  for (const line of lines.filter(Boolean)) {
     yy -= 14;
     text(page, line, M, yy, f.reg, 10, MUTED);
+  }
+  if (beneficiary.toLowerCase() !== d.clientName.trim().toLowerCase()) {
+    yy -= 20;
+    text(page, `${payerLabel}: ${d.clientName}${d.beneficiaryRelationship ? ` (${d.beneficiaryRelationship} of beneficiary)` : ''}`, M, yy, f.reg, 9, MUTED);
   }
   return yy;
 }
@@ -118,7 +132,7 @@ export async function buildInvoicePdf(d: SaleDocInput): Promise<Uint8Array> {
   const [w] = A4;
   let y = header(page, f, 'INVOICE', d.invoiceNo, d.issuedAt);
   const top = y;
-  const leftEnd = party(page, f, 'BILL TO', d, y);
+  const leftEnd = party(page, f, 'IN FAVOUR OF (PROPERTY BENEFICIARY)', d, y, 'Purchaser');
   const rightEnd = details(page, f, [
     ['Sale reference', d.saleReference], ['Transaction type', d.transactionType],
     ['Payment plan', d.paymentPlan], ['Payment reference', d.paymentReference],
@@ -159,7 +173,7 @@ export async function buildReceiptPdf(d: SaleDocInput): Promise<Uint8Array> {
   const [w] = A4;
   let y = header(page, f, 'SALES RECEIPT', d.receiptNo, d.issuedAt);
   const top = y;
-  const leftEnd = party(page, f, 'RECEIVED FROM', d, y);
+  const leftEnd = party(page, f, 'ISSUED IN FAVOUR OF (PROPERTY BENEFICIARY)', d, y, 'Payment received from');
   const rightEnd = details(page, f, [
     ['Invoice', d.invoiceNo], ['Sale reference', d.saleReference], ['Payment reference', d.paymentReference],
   ], top);
