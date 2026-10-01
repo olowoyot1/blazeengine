@@ -27,6 +27,7 @@ import type { Row } from '../db';
 import { cancelPending, openRound, registerRound, type Step } from './approvals';
 
 const OPS: Role[] = ['OPERATIONS', 'OPERATIONS_MANAGER'];
+const SALE_APPROVERS: Role[] = ['SALES_MANAGER', 'OPERATIONS_MANAGER'];
 const saleLabel = (s: Row) => `${s.client_name} — ${s.plot_reference || s.property_name || 'sale'}`;
 const saleLink = (s: Row | string) => `/sales/${typeof s === 'string' ? s : s.id}`;
 
@@ -82,15 +83,15 @@ export const SALE_ACTIONS: SaleAction[] = [
     fields: [],
     async apply(ctx, s) {
       const n = { title: 'New sale awaiting approval', message: `${saleLabel(s)} was submitted to a Sales Manager for approval.`, link: saleLink(s) };
-      await notifyRoles(ctx, ['SALES_MANAGER'], n);
+      await notifyRoles(ctx, SALE_APPROVERS, n);
       await notifyUsers(ctx, [s.created_by], { ...n, title: 'Sale sent for approval', message: `${saleLabel(s)} is awaiting Sales Manager approval.` });
       return 'Sale submitted for Sales Manager approval';
     },
   },
   {
     key: 'approve_new_sale', label: 'Approve new sale',
-    help: 'Sales Manager reviews the submitted sale. Payment processing cannot start until this approval is completed.',
-    roles: ['SALES_MANAGER'], from: ['PENDING_SALES_APPROVAL'], to: 'DRAFT',
+    help: 'Sales Manager or Operations Manager reviews the submitted sale. Payment processing cannot start until this approval is completed.',
+    roles: SALE_APPROVERS, from: ['PENDING_SALES_APPROVAL'], to: 'DRAFT',
     fields: [{ name: 'note', label: 'Approval note (optional)', type: 'textarea' }],
     async apply(ctx, s, i) {
       await ctx.tx.query(`update sales set gate_approved_by=$2 where id=$1`, [s.id, ctx.actor.id]);
@@ -116,7 +117,7 @@ export const SALE_ACTIONS: SaleAction[] = [
       await assertFreshEvidence(ctx, i.proof_url, 'payment proof');
       await addDoc(ctx, s.id, 'PAYMENT_PROOF', i.proof_url, 'Payment proof');
       await ctx.tx.query(`update sales set payment_status='PROOF_SUBMITTED', payment_reference=$2 where id=$1`, [s.id, i.payment_reference]);
-      await notifyRoles(ctx, ['SALES_MANAGER'], { title: 'Payment proof awaiting approval', message: `${saleLabel(s)} �� reference ${i.payment_reference}. Approve or cancel this sale.`, link: saleLink(s) });
+      await notifyRoles(ctx, ['SALES_MANAGER'], { title: 'Payment proof awaiting approval', message: `${saleLabel(s)} ��� reference ${i.payment_reference}. Approve or cancel this sale.`, link: saleLink(s) });
       await notifyRoles(ctx, ['ACCOUNTANT', 'FINANCE_OPERATIONS'], { title: 'Payment proof submitted', message: `${saleLabel(s)} is awaiting Sales Manager approval before Accounts processing.`, link: saleLink(s) });
       return `Payment ref ${i.payment_reference}${i.amount_paid ? ` (${money(i.amount_paid)})` : ''}`;
     },
@@ -154,7 +155,7 @@ export const SALE_ACTIONS: SaleAction[] = [
       await addDoc(ctx, s.id, 'INVOICE', i.invoice_url, `Invoice ${i.invoice_number}`);
       const flag = varianceRatio > 0.02 ? ` ⚠ differs from the original quote of ${money(quoted)} (${i.variance_reason})` : '';
       const n = { title: 'Invoice entered – sale awaiting approval', message: `${saleLabel(s)} — ${money(i.invoice_amount)} (invoice ${i.invoice_number}).${flag}`, link: saleLink(s) };
-      await notifyRoles(ctx, ['SALES_MANAGER'], n);
+      await notifyRoles(ctx, SALE_APPROVERS, n);
       await notifyUsers(ctx, [s.created_by], n);
       return `Invoice ${i.invoice_number} · ${money(i.invoice_amount)}${flag}`;
     },
@@ -162,7 +163,7 @@ export const SALE_ACTIONS: SaleAction[] = [
   {
     key: 'reject_sale', label: 'Send back to Accounts', danger: true,
     help: 'Invoice or payment details are wrong – return to the Accountant.',
-    roles: ['SALES_MANAGER'], from: ['INVOICE_ENTERED'], to: 'PAYMENT_PROOF_SUBMITTED', fields: [reason],
+    roles: SALE_APPROVERS, from: ['INVOICE_ENTERED'], to: 'PAYMENT_PROOF_SUBMITTED', fields: [reason],
     async apply(ctx, s, i) {
       await ctx.tx.query(`update sales set payment_status='PROOF_SUBMITTED' where id=$1`, [s.id]);
       await notifyRoles(ctx, ['ACCOUNTANT'], { title: 'Sale returned to Accounts', message: `${saleLabel(s)}: ${i.reason}`, link: saleLink(s) });
@@ -172,8 +173,8 @@ export const SALE_ACTIONS: SaleAction[] = [
   },
   {
     key: 'approve_sale', label: 'Approve sale',
-    help: 'Sales Manager confirms the sale. Operations then receives the approved sale.',
-    roles: ['SALES_MANAGER'], from: ['INVOICE_ENTERED'], to: 'SALES_APPROVED',
+    help: 'Sales Manager or Operations Manager confirms the sale. Operations then receives the approved sale.',
+    roles: SALE_APPROVERS, from: ['INVOICE_ENTERED'], to: 'SALES_APPROVED',
     fields: [{ name: 'note', label: 'Note (optional)', type: 'textarea' }],
     async apply(ctx, s) {
       // Recorded so the later "Sales Manager approval" step of the SALE_CHAIN can
@@ -423,7 +424,7 @@ export async function performSaleAction(actor: Actor, saleId: string, key: strin
     if (!s) throw new WorkflowError('Sale not found');
     if (!a.from.includes(s.status)) throw new WorkflowError(`Not available while the sale is "${SALE_STATUS_LABEL[s.status] ?? s.status}"`);
     if (a.ownOnly && actor.role === 'SALES' && s.created_by !== actor.id) throw new ForbiddenError('You can only act on sales you created');
-    if (a.key === 'approve_new_sale' && s.created_by === actor.id) throw new ForbiddenError('A Sales Manager cannot approve their own sale');
+    if (a.key === 'approve_new_sale' && s.created_by === actor.id) throw new ForbiddenError('You cannot approve your own sale');
     const parsed = parseFields(a.fields, input);
     const notes = (await a.apply(ctx, s, parsed)) || null;
     const nextStatus = a.key === 'approve_new_sale' && s.payment_status === 'PROOF_SUBMITTED' ? 'PAYMENT_PROOF_SUBMITTED' : (a.to ?? s.status);
@@ -446,7 +447,7 @@ const SALE_EDIT_FIELDS: Field[] = [
 ];
 
 export async function updateSale(actor: Actor, saleId: string, input: Record<string, unknown>) {
-  if (actor.role !== 'SUPER_ADMIN' && !['SALES_MANAGER'].includes(actor.role)) throw new ForbiddenError('Only a Sales Manager can edit a submitted sale');
+  if (actor.role !== 'SUPER_ADMIN' && !SALE_APPROVERS.includes(actor.role)) throw new ForbiddenError('Only a Sales Manager or Operations Manager can edit a submitted sale');
   const p = parseFields(SALE_EDIT_FIELDS, input);
   return run(actor, async ctx => {
     const sale = await one(ctx, `select * from sales where id=$1 for update`, [saleId]);
@@ -528,10 +529,10 @@ registerRound('SALE_CHAIN', {
   link: id => `/sales/${id}`,
   async title(ctx, id) { const s = await one(ctx, `select * from sales where id=$1`, [id]); return s ? `${saleLabel(s)} — ${money(s.amount)}` : ''; },
   async conflict(ctx, approval, actor) {
-    if (approval.step !== 'Sales Manager approval') return null;
+    if (approval.step !== 'Sales Manager approval' && approval.step !== 'Operations Manager approval') return null;
     const s = await one(ctx, `select gate_approved_by from sales where id=$1`, [approval.entity_id]);
     if (s?.gate_approved_by && s.gate_approved_by === actor.id)
-      return 'You already approved this sale earlier in the process — a different Sales Manager must complete this audit step';
+      return 'You already approved this sale earlier in the process — a different approver must complete this audit step';
     return null;
   },
   async onComplete(ctx, a) {
