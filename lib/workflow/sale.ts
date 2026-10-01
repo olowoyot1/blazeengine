@@ -24,6 +24,7 @@ import {
   parseFields, run, type Actor, type Ctx, type Field, type Parsed,
 } from './core';
 import type { Row } from '../db';
+import { buildInvoicePdf, buildReceiptPdf, type SaleDocInput } from '../pdf/saleDocuments';
 import { cancelPending, openRound, registerRound, type Step } from './approvals';
 
 const OPS: Role[] = ['OPERATIONS', 'OPERATIONS_MANAGER'];
@@ -48,6 +49,31 @@ async function addDoc(ctx: Ctx, saleId: string, type: string, url: unknown, name
   await ctx.tx.query(
     `insert into sale_documents(sale_id,document_type,document_name,document_url,uploaded_file_id,uploaded_by) values($1,$2,$3,$4,$5::uuid,$6)`,
     [saleId, type, name ?? type.replace(/_/g, ' ').toLowerCase(), value, m ? m[1] : null, ctx.actor.id]);
+}
+async function storePdf(ctx: Ctx, filename: string, bytes: Uint8Array) {
+  const buf = Buffer.from(bytes);
+  const row = (await one(ctx, `insert into uploaded_files(filename, mime_type, size_bytes, data, uploaded_by, purpose)
+    values($1,'application/pdf',$2,$3,$4::uuid,'document') returning id`, [filename, buf.length, buf, ctx.actor.id]))!;
+  return `/api/files/${row.id}`;
+}
+/** Generates the physical invoice (full estate value) and sales receipt (amount paid) and files them on the sale. */
+async function attachInvoiceAndReceipt(ctx: Ctx, s: Row, invoiceNo: string, paid: number) {
+  const estateValue = Number(s.estate_value ?? s.quoted_amount ?? 0);
+  if (!(estateValue > 0)) throw new WorkflowError('No estate value is recorded on this sale — ask Sales to set the estate value before generating the invoice');
+  const client = s.client_id ? await one(ctx, `select phone, email, address from clients where id=$1`, [s.client_id]) : undefined;
+  const actor = await one(ctx, `select name from users where id=$1::uuid`, [ctx.actor.id]);
+  const receiptNo = invoiceNo.replace(/^INV-/, 'RCT-');
+  const input: SaleDocInput = {
+    invoiceNo, receiptNo, issuedAt: new Date(),
+    clientName: String(s.client_name ?? 'Client'),
+    clientEmail: s.client_email ?? client?.email, clientPhone: client?.phone, clientAddress: client?.address,
+    propertyName: s.property_name, plotReference: s.plot_reference, saleReference: s.sale_reference,
+    transactionType: s.transaction_type, paymentPlan: s.payment_plan, paymentReference: s.payment_reference,
+    estateValue, amountPaid: paid, issuedBy: String(actor?.name ?? 'Accounts'),
+  };
+  const [invoicePdf, receiptPdf] = await Promise.all([buildInvoicePdf(input), buildReceiptPdf(input)]);
+  await addDoc(ctx, s.id, 'INVOICE', await storePdf(ctx, `${invoiceNo}.pdf`, invoicePdf), `Invoice ${invoiceNo}`);
+  await addDoc(ctx, s.id, 'SALES_RECEIPT', await storePdf(ctx, `${receiptNo}.pdf`, receiptPdf), `Sales receipt ${receiptNo}`);
 }
 async function siteRecord(ctx: Ctx, saleId: string, type: string, details: object) {
   await ctx.tx.query(`insert into site_records(sale_id,record_type,details,created_by) values($1,$2,$3,$4)`,
@@ -148,6 +174,7 @@ export const SALE_ACTIONS: SaleAction[] = [
       const invoiceNo = String(gen.no);
       await ctx.tx.query(`update sales set invoice_number=$2, amount=$3, payment_status='VERIFIED', invoice_variance_reason=null where id=$1`,
         [s.id, invoiceNo, paid]);
+      await attachInvoiceAndReceipt(ctx, s, invoiceNo, paid);
       const note = i.note ? ` Note: ${i.note}` : '';
       const n = { title: 'Invoice generated – sale awaiting approval', message: `${saleLabel(s)} — invoice ${invoiceNo} for ${money(paid)} (payment made).${note}`, link: saleLink(s) };
       await notifyRoles(ctx, SALE_APPROVERS, n);
