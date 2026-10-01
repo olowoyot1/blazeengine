@@ -15,7 +15,7 @@ export const CAPS: Record<Role, Cap[]> = {
   SALES_MANAGER: ['campaign.send','chat.read','lead.read_all','lead.write','client.read','client.write','sale.read_all','sale.create','approvals.read','report.sales'],
   SALES: ['chat.read','lead.read','lead.write','client.read','client.write','sale.read','sale.create'], MARKETER: ['campaign.send','chat.read','lead.read','lead.write','client.read','client.write'],
   ACCOUNTANT: ['sale.read','accounts.workspace','payroll.read','chat.read','expense.read_all','report.finance'], FINANCE_OPERATIONS: ['finance.workspace','payroll.read','chat.read','expense.read_all','report.finance'],
-  OPERATIONS_MANAGER: ['chat.read','sale.read','ops.workspace','expense.read_all','approvals.read','report.ops'], OPERATIONS: ['chat.read','sale.read','ops.workspace'], SITE_MANAGER: ['chat.read','sale.read','site.workspace','expense.read','expense.create_negotiation','report.site'],
+  OPERATIONS_MANAGER: ['chat.read','lead.read_all','sale.read','ops.workspace','expense.read_all','approvals.read','report.ops'], OPERATIONS: ['chat.read','lead.read_all','sale.read','ops.workspace'], SITE_MANAGER: ['chat.read','sale.read','site.workspace','expense.read','expense.create_negotiation','report.site'],
 };
 export const ADMIN_TIER_ROLES: Role[] = ['ADMIN','SUPER_ADMIN'];
 export function can(role: Role | string | undefined, cap: Cap): boolean { return !!role && (role === 'SUPER_ADMIN' || ((CAPS as Record<string,Cap[]>)[role]?.includes(cap) === true)); }

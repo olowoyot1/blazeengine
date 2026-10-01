@@ -17,6 +17,10 @@ async function ensureApprovalSchema() {
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS transaction_type text NOT NULL DEFAULT 'INITIAL_DEPOSIT';
       ALTER TABLE expenses ADD COLUMN IF NOT EXISTS transaction_reference text;
       ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS transaction_reference text;
+      CREATE SEQUENCE IF NOT EXISTS sale_reference_seq;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS sale_reference text;
+      UPDATE sales SET sale_reference = 'SALE-' || to_char(created_at, 'YYYYMM') || '-' || upper(substr(replace(id::text, '-', ''), 1, 8)) WHERE sale_reference IS NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS sales_sale_reference_unique ON sales(sale_reference);
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS invoice_number text;
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS approved_at timestamptz;
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS allocation_date date;
