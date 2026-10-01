@@ -10,6 +10,7 @@ import { EXPENSE_STATUS_LABEL } from '@/lib/constants';
 import { ExpenseActionPanel } from './ExpenseActionPanel';
 import ExpenseDocuments from './ExpenseDocuments';
 import FinancePaymentDocuments from './FinancePaymentDocuments';
+import { DeleteTransaction } from '@/components/DeleteTransaction';
 
 export default async function ExpenseDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -62,6 +63,10 @@ export default async function ExpenseDetail({ params }: { params: Promise<{ id: 
           <li key={ev.id}><b>{ev.action}</b> <span className="muted small">— {ev.actor || 'System'} · {fmtDateTime(ev.created_at)}</span>{ev.notes && <div className="muted small">{ev.notes}</div>}</li>
         ))}</ul>
       </div>
+
+      {(s.role === 'ADMIN' || s.role === 'SUPER_ADMIN') && (
+        <DeleteTransaction kind="EXPENSE" id={e.id} label={`expense ${e.transaction_reference || ''} (${e.vendor || e.category})`} />
+      )}
     </Shell>
   );
 }

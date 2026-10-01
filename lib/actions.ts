@@ -3,7 +3,7 @@ import { revalidatePath } from 'next/cache';
 import bcrypt from 'bcryptjs';
 import { requireUser, requireCap } from './guard';
 import { can } from './rbac';
-import { sql } from './db';
+import { sql, withTx } from './db';
 import { passwordProblem, startSession } from './auth';
 import { sendMail } from './email';
 import { sendBulkSms, normalizeNgPhone, smsConfigured } from './sms';
@@ -190,6 +190,47 @@ async function requireAdmin() {
   const s = await requireUser();
   if (!can(s.role, 'users.manage')) throw new ForbiddenError('Only administrators manage users');
   return s;
+}
+
+/**
+ * Permanently removes a sale or expense transaction. Admin-only. A snapshot of the
+ * deleted row is written to the audit trail so the removal itself stays traceable.
+ */
+export async function deleteTransaction(kind: 'SALE' | 'EXPENSE', id: string, reason: string): Promise<Result> {
+  try {
+    const s = await requireUser();
+    if (!ADMIN_TIER.includes(s.role)) return { error: 'Only administrators can delete transactions.' };
+    if (kind !== 'SALE' && kind !== 'EXPENSE') return { error: 'Invalid transaction type' };
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return { error: 'Invalid transaction' };
+    const why = reason.trim();
+    if (why.length < 5) return { error: 'Please give a reason (at least 5 characters).' };
+    const table = kind === 'SALE' ? 'sales' : 'expenses';
+    const path = kind === 'SALE' ? `/sales/${id}` : `/expenses/${id}`;
+
+    const deleted = await withTx(async tx => {
+      const { rows } = await tx.query(`select * from ${table} where id=$1::uuid for update`, [id]);
+      if (!rows[0]) return null;
+      if (kind === 'SALE') {
+        await tx.query(`update expenses set sale_id=null, updated_at=now() where sale_id=$1::uuid`, [id]);
+        await tx.query(`delete from site_records where sale_id=$1::uuid`, [id]);
+        await tx.query(`delete from operations where sale_id=$1::uuid`, [id]);
+      }
+      await tx.query(`delete from approvals where entity_type=$1 and entity_id=$2::uuid`, [kind, id]);
+      await tx.query(`delete from workflow_events where entity_type=$1 and entity_id=$2::uuid`, [kind, id]);
+      await tx.query(`delete from notifications where link=$1`, [path]);
+      await tx.query(`delete from ${table} where id=$1::uuid`, [id]);
+      await tx.query(
+        `insert into audit_logs(user_id,action,entity_type,entity_id,metadata) values($1::uuid,$2,$3,$4::uuid,$5)`,
+        [s.id, `${kind}_DELETED`, kind, id, JSON.stringify({ reason: why, snapshot: rows[0] })],
+      );
+      return rows[0];
+    });
+    if (!deleted) return { error: 'Transaction not found or already deleted.' };
+
+    revalidatePath(kind === 'SALE' ? '/sales' : '/expenses');
+    revalidatePath('/dashboard'); revalidatePath('/approvals'); revalidatePath('/notifications'); revalidatePath('/audit');
+    return { ok: true };
+  } catch (e) { return toErr(e); }
 }
 /**
  * Enforces the admin hierarchy: a plain ADMIN may manage any non-admin-tier account,
