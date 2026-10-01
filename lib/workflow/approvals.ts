@@ -39,7 +39,7 @@ export async function openRound(
   await notifyRoles(ctx, steps.filter(s => s.seq === first).map(s => s.role), {
     title: `Approval needed: ${steps.find(s => s.seq === first)!.step}`,
     message: await h.title(ctx, entityId),
-    link: '/approvals',
+    link: h.link(entityId),
   });
 }
 
@@ -104,7 +104,7 @@ export async function decide(actor: Actor, approvalId: string, decision: 'APPROV
     if (nextSeq > a.seq) {
       const next = remaining.filter(r => r.seq === nextSeq);
       await notifyRoles(ctx, next.map(r => r.approver_role), {
-        title: `Approval needed: ${next[0].step}`, message: await h.title(ctx, a.entity_id), link: '/approvals',
+        title: `Approval needed: ${next[0].step}`, message: await h.title(ctx, a.entity_id), link: h.link(a.entity_id),
       });
     }
     return { done: false, outcome: 'APPROVED' as const };

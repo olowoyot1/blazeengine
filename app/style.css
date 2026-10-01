@@ -86,6 +86,10 @@ h1,h2,h3{margin-top:0}
 .notification-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}
 .notification-unread{background:#fffaf0;border-left:3px solid var(--brand-orange);padding-left:10px!important}
 .notification-read{opacity:.68}
+.notification-link{display:block;flex:1;min-width:0;color:inherit;text-decoration:none;border-radius:6px;cursor:pointer}
+.notification-link:hover b,.notification-link:focus-visible b{text-decoration:underline}
+.notification-link:focus-visible{outline:2px solid var(--brand-orange);outline-offset:3px}
+.notification-open{color:var(--brand-orange);font-weight:600}
 .small-btn{padding:7px 10px;font-size:12px;white-space:nowrap}
 @media(max-width:900px){.side{width:220px}.content{padding:20px}.top{padding:12px 20px}.table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}.table{min-width:680px}.actioncard{padding:14px}.workflow{grid-template-columns:repeat(4,minmax(145px,1fr))}}
 @media(max-width:720px){.side{width:100%;position:relative;height:auto;max-height:none;padding:16px 12px}.brand{font-size:20px}.nav{grid-template-columns:1fr 1fr;gap:2px}.nav a{min-height:44px;padding:11px 10px}.nav-department summary{min-height:44px}.nav-subnav a{min-height:42px}.top{padding:12px 14px;align-items:flex-start}.top>div:last-child{width:100%;justify-content:space-between}.content{padding:12px}.card{padding:14px}.grid,.grid2,.grid3,.formgrid{grid-template-columns:1fr}.formgrid .full-row{grid-column:auto}.notification-head{align-items:flex-start}.notification-head .btn{flex-shrink:0}.login-card{padding:22px}.stepper{overflow-x:auto;flex-wrap:nowrap;padding-bottom:4px}.step-chip{flex:0 0 auto}.actioncard .btn{max-width:100%;white-space:normal}.workflow{grid-template-columns:repeat(8,minmax(130px,1fr));overflow-x:auto}}
