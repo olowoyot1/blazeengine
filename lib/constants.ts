@@ -19,17 +19,16 @@ export const ROLE_META: Record<Role, { label: string; department: string }> = {
   SITE_MANAGER: { label: 'Site Manager', department: 'Site Management' },
 };
 
-export const DAILY_LEAD_TARGET = 10;      // marketer target (sheet: "10 leads per day")
-export const ALLOCATION_WINDOW_DAYS = 30; // allocation date / ops docs "within 30 days"
+export const DAILY_LEAD_TARGET = 10;
+export const ALLOCATION_WINDOW_DAYS = 30;
 
-/** Ordered sale lifecycle. RETURNED/CANCELLED sit outside the happy path. */
 export const SALE_STATUS_LABEL: Record<string, string> = {
   PENDING_SALES_APPROVAL: 'Pending manager approval',
   DRAFT: 'Approved for payment proof',
   PAYMENT_PROOF_SUBMITTED: 'Payment proof submitted',
   INVOICE_ENTERED: 'Invoice generated · awaiting Sales approval',
-  SALES_APPROVED: 'Approved sale · awaiting sale documents',
-  CONTRACT_PREPARED: 'Sale documents ready · awaiting Accounts',
+  SALES_APPROVED: 'Approved sale · awaiting Contract + Acknowledgement',
+  CONTRACT_PREPARED: 'Contract + Acknowledgement ready · awaiting document approval',
   ACCOUNT_DOCS_SENT: 'Sales documents sent · awaiting Operations',
   SITE_NOTIFIED: 'Ready for allocation · Operations docs due',
   OPS_DEED_UPLOADED: 'Deed of assignment uploaded · awaiting Site survey',
