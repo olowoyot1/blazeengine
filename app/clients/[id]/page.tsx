@@ -6,6 +6,7 @@ import { getClient } from '@/lib/queries';
 import { getClientSales } from '@/lib/clientSales';
 import { getClientSaleDocuments } from '@/lib/clientDocuments';
 import { Badge } from '@/components/Badge';
+import SalesFlowAutoRefresh from '@/components/SalesFlowAutoRefresh';
 import { naira, fmtDateTime, human } from '@/lib/format';
 import { SALE_STATUS_LABEL, SALE_STATUS_ORDER } from '@/lib/constants';
 import { ClientProfileForm } from './ClientProfileForm';
@@ -32,6 +33,15 @@ function roleLabel(role?: string | null) {
 }
 
 function nextAction(s: any) {
+  if (s.next_action_title) {
+    return {
+      title: String(s.next_action_title),
+      owner: s.next_action_owner_name ? `${s.next_action_owner_name} · ${roleLabel(s.next_action_owner_role)}` : roleLabel(s.next_action_owner_role),
+      tone: s.status === 'ALLOCATED' ? 'done' : s.status === 'CANCELLED' ? 'muted' : 'attention',
+      due: s.next_action_due_date,
+      updated: s.next_action_updated_at,
+    };
+  }
   if (s.status === 'CANCELLED') return { title: 'Sale closed', owner: 'No further action', tone: 'muted' };
   if (s.status === 'ALLOCATED') return { title: 'Sale completed — allocated', owner: 'Completed', tone: 'done' };
 
@@ -74,7 +84,10 @@ function progressPercent(status: string) {
 function SalesFlowMonitor({ sales }: { sales: any[] }) {
   const active = sales.filter(s => !['ALLOCATED', 'CANCELLED'].includes(String(s.status)));
   const attention = active.filter(s => nextAction(s).tone === 'attention');
-  const overdue = active.filter(s => s.pending_task_due_date && new Date(s.pending_task_due_date).getTime() < Date.now());
+  const overdue = active.filter(s => {
+    const due = nextAction(s).due;
+    return due && new Date(due).getTime() < Date.now();
+  });
 
   return (
     <div className="card" style={{ marginTop: 15 }}>
@@ -82,15 +95,18 @@ function SalesFlowMonitor({ sales }: { sales: any[] }) {
         <div>
           <h3 style={{ marginBottom: 4 }}>Sales Flow Monitor</h3>
           <p className="muted small" style={{ margin: 0 }}>
-            Proactively tracks every active sale, its current stage, last activity and the next action required to move it forward.
+            Proactively tracks every active sale, its current stage, assigned next action and the responsible owner.
           </p>
         </div>
-        <span className="badge">{active.length} active</span>
+        <div style={{ display: 'grid', gap: 4, justifyItems: 'end' }}>
+          <span className="badge">{active.length} active</span>
+          <SalesFlowAutoRefresh />
+        </div>
       </div>
       <div className="grid3" style={{ marginTop: 12 }}>
         <div className="card" style={{ margin: 0 }}><div className="muted small">Total sales</div><strong style={{ fontSize: 24 }}>{sales.length}</strong></div>
         <div className="card" style={{ margin: 0 }}><div className="muted small">Needs action</div><strong style={{ fontSize: 24 }}>{attention.length}</strong></div>
-        <div className="card" style={{ margin: 0 }}><div className="muted small">Overdue tasks</div><strong style={{ fontSize: 24 }}>{overdue.length}</strong></div>
+        <div className="card" style={{ margin: 0 }}><div className="muted small">Overdue next actions</div><strong style={{ fontSize: 24 }}>{overdue.length}</strong></div>
       </div>
     </div>
   );
@@ -102,7 +118,7 @@ function SalesHistory({ sales }: { sales: any[] }) {
     <div style={{ display: 'grid', gap: 12 }}>
       {sales.map((r: any) => {
         const action = nextAction(r);
-        const overdue = r.pending_task_due_date && new Date(r.pending_task_due_date).getTime() < Date.now();
+        const overdue = action.due && new Date(action.due).getTime() < Date.now() && action.tone === 'attention';
         return (
           <div key={r.id} className="card" style={{ margin: 0, border: '1px solid var(--border)' }}>
             <div className="section-title">
@@ -134,6 +150,7 @@ function SalesHistory({ sales }: { sales: any[] }) {
                 <strong>{action.title}</strong>
                 <div className="muted small" style={{ marginTop: 4 }}>Owner: {action.owner}</div>
                 {action.due && <div className={overdue ? 'small' : 'muted small'} style={{ marginTop: 4 }}>{overdue ? 'OVERDUE · ' : 'Due · '}{fmtDateTime(action.due)}</div>}
+                {action.updated && <div className="muted small" style={{ marginTop: 4 }}>Assignment updated {fmtDateTime(action.updated)}</div>}
               </div>
               <div className="card" style={{ margin: 0 }}>
                 <div className="muted small">LAST ACTIVITY</div>
