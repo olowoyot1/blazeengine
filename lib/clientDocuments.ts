@@ -23,7 +23,8 @@ export async function getClientSaleDocuments(clientId: string) {
     from sale_documents d
     join sales s on s.id=d.sale_id
     where s.client_id=${clientId}::uuid
-      and d.document_type in ('CONTRACT','ACKNOWLEDGMENT_LETTER')
+      and d.document_type in ('CONTRACT','ACKNOWLEDGMENT_LETTER','INVOICE','SALES_ORDER','SALES_RECEIPT')
+      and d.document_url is not null
     order by d.created_at desc
   `;
 }
