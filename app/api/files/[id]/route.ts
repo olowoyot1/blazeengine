@@ -7,7 +7,7 @@ import { sql } from '@/lib/db';
  * Streams a private workflow file only when the signed-in user is authorized to see
  * the record that owns/references it. A UUID is not treated as an authorization token.
  */
-export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const s = await requireUser({ allowPasswordChange: true });
   const { id } = await params;
   if (!/^[0-9a-f-]{36}$/i.test(id)) return NextResponse.json({ error: 'Not found' }, { status: 404 });
@@ -61,10 +61,11 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   if (!f) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
   const safeName = String(f.filename).replace(/[\r\n"\\]/g, '_').slice(0, 200) || 'document';
+  const download = new URL(req.url).searchParams.get('download') === '1';
   return new NextResponse(f.data, {
     headers: {
       'Content-Type': f.mime_type,
-      'Content-Disposition': `inline; filename="${safeName}"`,
+      'Content-Disposition': `${download ? 'attachment' : 'inline'}; filename="${safeName}"`,
       'Cache-Control': 'private, no-store',
       'X-Content-Type-Options': 'nosniff',
     },
