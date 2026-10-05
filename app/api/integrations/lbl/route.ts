@@ -23,6 +23,46 @@ function check(req: NextRequest) {
   return Boolean(expected && supplied && supplied === expected);
 }
 
+async function sendDocumentsToClient(sale: any, docs: any[]) {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.MAIL_FROM;
+  const to = String(sale.client_email || '').trim();
+  if (!apiKey || !from) throw new Error('Email delivery is not configured in Blaze Engine (RESEND_API_KEY / MAIL_FROM)');
+  if (!to) throw new Error('This sale has no client email address');
+
+  const attachments: { filename: string; content: string; contentType?: string }[] = [];
+  for (const doc of docs) {
+    const match = String(doc.document_url || '').match(/^\/api\/files\/([0-9a-f-]{36})$/i);
+    if (!match) continue;
+    const result = await query(`select filename, mime_type, data from uploaded_files where id=$1::uuid`, [match[1]]);
+    const file = result.rows[0] as any;
+    if (!file?.data) continue;
+    attachments.push({
+      filename: String(file.filename || doc.document_name || 'Landblaze-document.pdf'),
+      content: Buffer.from(file.data).toString('base64'),
+      contentType: String(file.mime_type || 'application/pdf'),
+    });
+  }
+  if (attachments.length < 2) throw new Error('Generated document files could not be loaded for email delivery');
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      from,
+      to: [to],
+      subject: `Landblaze sales documents — ${sale.invoice_number}`,
+      text: `Dear ${sale.client_name || 'Client'},\n\nPlease find attached your Landblaze sales documents for ${sale.property_name || 'your property'}${sale.plot_reference ? ` (${sale.plot_reference})` : ''}.\n\nDocument reference: ${sale.invoice_number}\n\nRegards,\nLandblaze Accounts`,
+      attachments,
+    }),
+  });
+  if (!response.ok) {
+    let detail = '';
+    try { detail = JSON.stringify(await response.json()); } catch {}
+    throw new Error(`Client email delivery failed: ${detail || response.statusText}`);
+  }
+}
+
 export async function GET(req: NextRequest) {
   if (!check(req)) return unauthorized();
   const status = req.nextUrl.searchParams.get('status') || 'PAYMENT_PROOF_SUBMITTED,INVOICE_ENTERED,SALES_APPROVED';
@@ -81,12 +121,13 @@ export async function POST(req: NextRequest) {
         const hasReceipt = docs.some(d => d.document_type === 'SALES_RECEIPT');
         const hasPrimary = docs.some(d => d.document_type === 'INVOICE' || d.document_type === 'SALES_ORDER');
         if (!hasReceipt || !hasPrimary) throw new Error('Generated sales documents are incomplete');
+        await sendDocumentsToClient(sale, docs);
         await tx.query(`update sales set status='ACCOUNT_DOCS_SENT' where id=$1`, [saleId]);
-        await tx.query(`insert into workflow_events(entity_type,entity_id,stage,action,from_status,to_status,actor_id,notes) values('SALE',$1,'SALES_DOCUMENTS','send_from_lbl_portal','SALES_APPROVED','ACCOUNT_DOCS_SENT',$2,$3)`, [saleId, actor.id, 'Approved generated sales documents sent from LBL Portal']);
-        await tx.query(`insert into audit_logs(user_id,action,entity_type,entity_id,metadata) values($1,'LBL_PORTAL_SEND','SALE',$2,$3)`, [actor.id, saleId, JSON.stringify({ source: 'LBLPortal', document_number: sale.invoice_number })]);
+        await tx.query(`insert into workflow_events(entity_type,entity_id,stage,action,from_status,to_status,actor_id,notes) values('SALE',$1,'SALES_DOCUMENTS','send_from_lbl_portal','SALES_APPROVED','ACCOUNT_DOCS_SENT',$2,$3)`, [saleId, actor.id, 'Generated sales documents emailed to client from LBL Portal']);
+        await tx.query(`insert into audit_logs(user_id,action,entity_type,entity_id,metadata) values($1,'LBL_PORTAL_SEND','SALE',$2,$3)`, [actor.id, saleId, JSON.stringify({ source: 'LBLPortal', document_number: sale.invoice_number, client_email: sale.client_email })]);
         const recipients = await tx.query(`select id from users where active and role = any($1::text[])`, [['OPERATIONS','OPERATIONS_MANAGER']]);
         if (recipients.rows.length) {
-          await tx.query(`insert into notifications(user_id,title,message,link) select unnest($1::uuid[]),$2,$3,$4`, [recipients.rows.map((r:any)=>r.id), 'Sales documents sent', `${sale.client_name} — ${sale.invoice_number} has passed second-level verification and was sent from LBL Portal.`, `/sales/${saleId}`]);
+          await tx.query(`insert into notifications(user_id,title,message,link) select unnest($1::uuid[]),$2,$3,$4`, [recipients.rows.map((r:any)=>r.id), 'Sales documents sent', `${sale.client_name} — ${sale.invoice_number} passed second-level verification and was emailed to the client from LBL Portal.`, `/sales/${saleId}`]);
         }
         return { saleId, status: 'ACCOUNT_DOCS_SENT', documentNumber: sale.invoice_number, clientEmail: sale.client_email || null };
       });
