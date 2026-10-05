@@ -56,15 +56,63 @@ async function storePdf(ctx: Ctx, filename: string, bytes: Uint8Array) {
     values($1,'application/pdf',$2,$3,$4::uuid,'document') returning id`, [filename, buf.length, buf, ctx.actor.id]))!;
   return `/api/files/${row.id}`;
 }
-/** Generates the physical invoice (full estate value) and sales receipt (amount paid) and files them on the sale. */
-async function attachInvoiceAndReceipt(ctx: Ctx, s: Row, invoiceNo: string, paid: number, reissued = false) {
+type DocNature = 'OUTRIGHT' | 'INSTALLMENT' | 'TOP_UP';
+type AccountDocNumbers = { nature: DocNature; invoiceNo: string | null; salesOrderNo: string | null; receiptNo: string };
+
+function documentNature(s: Row): DocNature {
+  if (String(s.transaction_type ?? '').toUpperCase() === 'TOP_UP') return 'TOP_UP';
+  return String(s.payment_plan ?? '').toUpperCase() === 'OUTRIGHT' ? 'OUTRIGHT' : 'INSTALLMENT';
+}
+
+function storedDocNumbers(s: Row): AccountDocNumbers | null {
+  const nature = documentNature(s);
+  const receiptNo = s.sales_receipt_no ? String(s.sales_receipt_no) : null;
+  if (!receiptNo) return null;
+  if (nature === 'OUTRIGHT' && !s.sales_invoice_no) return null;
+  if (nature === 'INSTALLMENT' && !s.sales_order_no) return null;
+  return {
+    nature, receiptNo,
+    invoiceNo: nature === 'OUTRIGHT' ? String(s.sales_invoice_no) : null,
+    salesOrderNo: nature === 'INSTALLMENT' ? String(s.sales_order_no) : null,
+  };
+}
+
+/** Allocates system document numbers for the transaction nature: outright → invoice + receipt, installment → sales order + receipt, top-up → receipt. */
+async function allocateDocNumbers(ctx: Ctx, s: Row): Promise<AccountDocNumbers> {
+  const nature = documentNature(s);
+  const gen = (await one(ctx, `select to_char(now(), 'YYYYMM') || '-' || lpad(nextval('invoice_number_seq')::text, 6, '0') as no`))!;
+  const serial = String(gen.no);
+  return {
+    nature,
+    invoiceNo: nature === 'OUTRIGHT' ? `INV-${serial}` : null,
+    salesOrderNo: nature === 'INSTALLMENT' ? `SO-${serial}` : null,
+    receiptNo: `RCT-${serial}`,
+  };
+}
+
+async function saveDocNumbers(ctx: Ctx, saleId: string, n: AccountDocNumbers) {
+  await ctx.tx.query(`update sales set invoice_number=$2, sales_invoice_no=$3, sales_order_no=$4, sales_receipt_no=$5 where id=$1`,
+    [saleId, n.invoiceNo ?? n.salesOrderNo ?? n.receiptNo, n.invoiceNo, n.salesOrderNo, n.receiptNo]);
+}
+
+function describeDocs(n: AccountDocNumbers) {
+  return [
+    n.invoiceNo ? `invoice ${n.invoiceNo}` : null,
+    n.salesOrderNo ? `sales order ${n.salesOrderNo}` : null,
+    `sales receipt ${n.receiptNo}`,
+  ].filter(Boolean).join(' and ');
+}
+
+/** Generates the PDFs for the transaction nature and files them on the sale. */
+async function attachAccountDocuments(ctx: Ctx, s: Row, numbers: AccountDocNumbers, paid: number, reissued = false) {
   const estateValue = Number(s.estate_value ?? s.quoted_amount ?? 0);
-  if (!(estateValue > 0)) throw new WorkflowError('No estate value is recorded on this sale — ask Sales to set the estate value before generating the invoice');
+  if (!(estateValue > 0)) throw new WorkflowError('No estate value is recorded on this sale — ask Sales to set the estate value before generating account documents');
   const client = s.client_id ? await one(ctx, `select phone, email, address from clients where id=$1`, [s.client_id]) : undefined;
   const actor = await one(ctx, `select name from users where id=$1::uuid`, [ctx.actor.id]);
-  const receiptNo = invoiceNo.replace(/^(INV|SO)-/, 'RCT-');
+  const { receiptNo } = numbers;
+  const primaryNo = numbers.invoiceNo ?? numbers.salesOrderNo ?? receiptNo;
   const input: SaleDocInput = {
-    invoiceNo, receiptNo, issuedAt: new Date(),
+    invoiceNo: primaryNo, receiptNo, issuedAt: new Date(),
     clientName: String(s.client_name ?? 'Client'),
     clientEmail: s.client_email ?? client?.email, clientPhone: client?.phone, clientAddress: client?.address,
     beneficiaryName: s.beneficiary_name, beneficiaryPhone: s.beneficiary_phone, beneficiaryEmail: s.beneficiary_email,
@@ -73,21 +121,14 @@ async function attachInvoiceAndReceipt(ctx: Ctx, s: Row, invoiceNo: string, paid
     transactionType: s.transaction_type, paymentPlan: s.payment_plan, paymentReference: s.payment_reference,
     estateValue, amountPaid: paid, issuedBy: String(actor?.name ?? 'Accounts'),
   };
-  const isTopUp = String(s.transaction_type ?? '').toUpperCase() === 'TOP_UP';
-  const isOutright = String(s.payment_plan ?? '').toUpperCase() === 'OUTRIGHT';
-  const receiptPdf = await buildReceiptPdf(input);
-  if (isTopUp) {
-    const receiptNo = invoiceNo;
-    const suffix = reissued ? ` (reissued to ${s.beneficiary_name})` : '';
-    await addDoc(ctx, s.id, 'SALES_RECEIPT', await storePdf(ctx, `${receiptNo}.pdf`, receiptPdf), `Sales receipt ${receiptNo}${suffix}`);
-    return;
-  }
-  const primaryPdf = isOutright ? await buildInvoicePdf(input) : await buildSalesOrderPdf(input);
   const suffix = reissued ? ` (reissued to ${s.beneficiary_name})` : '';
-  const primaryType = isOutright ? 'INVOICE' : 'SALES_ORDER';
-  const primaryLabel = isOutright ? 'Invoice' : 'Sales order';
-  await addDoc(ctx, s.id, primaryType, await storePdf(ctx, `${invoiceNo}.pdf`, primaryPdf), `${primaryLabel} ${invoiceNo}${suffix}`);
-  await addDoc(ctx, s.id, 'SALES_RECEIPT', await storePdf(ctx, `${receiptNo}.pdf`, receiptPdf), `Sales receipt ${receiptNo}${suffix}`);
+  if (numbers.invoiceNo) {
+    await addDoc(ctx, s.id, 'INVOICE', await storePdf(ctx, `${numbers.invoiceNo}.pdf`, await buildInvoicePdf(input)), `Invoice ${numbers.invoiceNo}${suffix}`);
+  }
+  if (numbers.salesOrderNo) {
+    await addDoc(ctx, s.id, 'SALES_ORDER', await storePdf(ctx, `${numbers.salesOrderNo}.pdf`, await buildSalesOrderPdf(input)), `Sales order ${numbers.salesOrderNo}${suffix}`);
+  }
+  await addDoc(ctx, s.id, 'SALES_RECEIPT', await storePdf(ctx, `${receiptNo}.pdf`, await buildReceiptPdf(input)), `Sales receipt ${receiptNo}${suffix}`);
 }
 async function siteRecord(ctx: Ctx, saleId: string, type: string, details: object) {
   await ctx.tx.query(`insert into site_records(sale_id,record_type,details,created_by) values($1,$2,$3,$4)`,
@@ -174,29 +215,27 @@ export const SALE_ACTIONS: SaleAction[] = [
     },
   },
   {
-    key: 'enter_invoice', label: 'Generate invoice',
-    help: 'Verify the payment, then generate the invoice. The invoice number is assigned automatically and the invoice amount is the payment made (not the property value). The sale is then sent back to Sales for approval.',
+    key: 'enter_invoice', label: 'Generate account documents',
+    help: 'Verify the payment, then generate the account documents for this transaction. Outright purchases get an invoice and sales receipt, installment purchases get a sales order and sales receipt, and top-ups get a sales receipt only. Numbers and PDFs are generated automatically. The sale is then sent back to Sales for approval.',
     roles: ['ACCOUNTANT', 'FINANCE_OPERATIONS'], from: ['PAYMENT_PROOF_SUBMITTED', 'DRAFT'], to: 'INVOICE_ENTERED',
     fields: [
       { name: 'note', label: 'Note to Sales (optional)', type: 'textarea' },
     ],
     async apply(ctx, s, i) {
       const paid = Number(s.payment_amount ?? 0);
-      if (!(paid > 0)) throw new WorkflowError('No payment amount is recorded on this sale — ask Sales to update the payment amount before generating the invoice');
-      if (s.invoice_number) throw new WorkflowError(`Invoice ${s.invoice_number} has already been generated for this sale`);
-      const transactionType = String(s.transaction_type ?? '').toUpperCase();
-      const paymentPlan = String(s.payment_plan ?? '').toUpperCase();
-      const numberPrefix = transactionType === 'TOP_UP' ? 'RCT-' : paymentPlan === 'OUTRIGHT' ? 'INV-' : 'SO-';
-      const gen = (await one(ctx, `select $1 || to_char(now(), 'YYYYMM') || '-' || lpad(nextval('invoice_number_seq')::text, 6, '0') as no`, [numberPrefix]))!;
-      const invoiceNo = String(gen.no);
-      await ctx.tx.query(`update sales set invoice_number=$2, sales_receipt_no=case when $4='TOP_UP' then $2 else sales_receipt_no end, amount=$3, payment_status='VERIFIED', invoice_variance_reason=null where id=$1`,
-        [s.id, invoiceNo, paid, transactionType]);
-      await attachInvoiceAndReceipt(ctx, s, invoiceNo, paid);
+      if (!(paid > 0)) throw new WorkflowError('No payment amount is recorded on this sale — ask Sales to update the payment amount before generating account documents');
+      const existing = storedDocNumbers(s);
+      if (existing) throw new WorkflowError(`Account documents (${describeDocs(existing)}) have already been generated for this sale`);
+      const numbers = await allocateDocNumbers(ctx, s);
+      await saveDocNumbers(ctx, s.id, numbers);
+      await ctx.tx.query(`update sales set amount=$2, payment_status='VERIFIED', invoice_variance_reason=null where id=$1`, [s.id, paid]);
+      await attachAccountDocuments(ctx, s, numbers, paid);
+      const docs = describeDocs(numbers);
       const note = i.note ? ` Note: ${i.note}` : '';
-      const n = { title: 'Invoice generated – sale awaiting approval', message: `${saleLabel(s)} — invoice ${invoiceNo} for ${money(paid)} (payment made).${note}`, link: saleLink(s) };
+      const n = { title: 'Account documents generated – sale awaiting approval', message: `${saleLabel(s)} — ${docs} for ${money(paid)} (payment made).${note}`, link: saleLink(s) };
       await notifyRoles(ctx, SALE_APPROVERS, n);
       await notifyUsers(ctx, [s.created_by], n);
-      return `Invoice ${invoiceNo} generated · ${money(paid)}${note}`;
+      return `Generated ${docs} · ${money(paid)}${note}`;
     },
   },
   {
@@ -265,37 +304,24 @@ export const SALE_ACTIONS: SaleAction[] = [
   },
   {
     key: 'send_sales_documents', label: 'Send account documents',
-    help: 'Record the account document numbers already generated for this transaction and send them. Operations is notified.',
+    help: 'Send the system-generated account documents for this transaction to the client. Any missing document numbers and PDFs are generated automatically. Operations is notified.',
     roles: ['ACCOUNTANT'], from: ['CONTRACT_PREPARED'], to: 'ACCOUNT_DOCS_SENT',
-    fields: [
-      { name: 'sales_order_no', label: 'Sales order no. (installment only)', type: 'text' },
-      { name: 'sales_receipt_no', label: 'Sales receipt no.', type: 'text', required: true },
-      { name: 'sales_invoice_no', label: 'Sales invoice no. (outright only)', type: 'text' },
-    ],
-    async apply(ctx, s, i) {
+    fields: [],
+    async apply(ctx, s) {
       const documentApprovals = await one(ctx, `select count(*)::int as n from approvals where entity_type='SALE' and entity_id=$1 and round='SALE_DOCUMENTS_APPROVAL' and status='APPROVED'`, [s.id]);
       if (Number(documentApprovals?.n || 0) < 2) throw new WorkflowError('Sales originator and Sales Manager must approve the Operations documents first');
-      const transactionType = String(s.transaction_type ?? '').toUpperCase();
-      const paymentPlan = String(s.payment_plan ?? '').toUpperCase();
-      if (!i.sales_receipt_no) throw new WorkflowError('A sales receipt number is required');
-      if (transactionType === 'TOP_UP') {
-        if (i.sales_order_no || i.sales_invoice_no) throw new WorkflowError('Top-ups only receive a sales receipt');
-      } else if (paymentPlan === 'OUTRIGHT') {
-        if (!i.sales_invoice_no || i.sales_order_no) throw new WorkflowError('Outright purchases require an invoice and sales receipt only');
-      } else if (!i.sales_order_no || i.sales_invoice_no) {
-        throw new WorkflowError('Installmental purchases require a sales order and sales receipt only');
+      let numbers = storedDocNumbers(s);
+      if (!numbers) {
+        numbers = await allocateDocNumbers(ctx, s);
+        await saveDocNumbers(ctx, s.id, numbers);
+        await attachAccountDocuments(ctx, s, numbers, Number(s.payment_amount ?? s.amount ?? 0));
       }
-      await ctx.tx.query(`update sales set sales_order_no=$2, sales_receipt_no=$3, sales_invoice_no=$4 where id=$1`,
-        [s.id, i.sales_order_no || null, i.sales_receipt_no, i.sales_invoice_no || null]);
-      await notifyRoles(ctx, OPS, { title: 'Sales documents sent', message: `${saleLabel(s)}. Open the operations portal for allocation.`, link: saleLink(s) });
-      await notifyUsers(ctx, [s.created_by], { title: 'Sales documents sent to client', message: saleLabel(s), link: saleLink(s) });
-      const accountDocuments = [
-        i.sales_invoice_no ? `sales invoice (${i.sales_invoice_no})` : null,
-        i.sales_order_no ? `sales order (${i.sales_order_no})` : null,
-        `sales receipt (${i.sales_receipt_no})`,
-      ].filter(Boolean).join(' and ');
+      const docs = describeDocs(numbers);
+      await notifyRoles(ctx, OPS, { title: 'Sales documents sent', message: `${saleLabel(s)} — ${docs}. Open the operations portal for allocation.`, link: saleLink(s) });
+      await notifyUsers(ctx, [s.created_by], { title: 'Sales documents sent to client', message: `${saleLabel(s)} — ${docs}`, link: saleLink(s) });
       mailClient(ctx, s.client_email, 'Your Landblaze account documents',
-        `Dear ${s.client_name},\n\nYour ${accountDocuments} have been issued.\n\nLandblaze`);
+        `Dear ${s.client_name},\n\nYour ${docs} have been issued.\n\nLandblaze`);
+      return `Sent ${docs}`;
     },
   },
   {
@@ -600,7 +626,8 @@ export async function changeBeneficiary(actor: Actor, saleId: string, input: Rec
     await ctx.tx.query(`insert into sale_beneficiary_changes(sale_id, previous, current, reason, changed_by) values($1,$2,$3,$4,$5)`,
       [saleId, JSON.stringify(previous), JSON.stringify(pick(updated)), p.reason, actor.id]);
     const reissue = !!updated.invoice_number;
-    if (reissue) await attachInvoiceAndReceipt(ctx, updated, String(updated.invoice_number), Number(updated.payment_amount ?? updated.amount ?? 0), true);
+    const reissueNumbers = reissue ? storedDocNumbers(updated) : null;
+  if (reissueNumbers) await attachAccountDocuments(ctx, updated, reissueNumbers, Number(updated.payment_amount ?? updated.amount ?? 0), true);
     const notes = `${previous.name || 'No beneficiary'} → ${p.beneficiary_name}. Reason: ${p.reason}${reissue ? ' · invoice and receipt reissued' : ''}`;
     await logEvent(ctx, 'SALE', saleId, 'SALES', 'Property beneficiary changed', s.status, s.status, notes);
     await audit(ctx, 'SALE_BENEFICIARY_CHANGED', 'SALE', saleId, { previous, current: pick(updated), reason: p.reason });
