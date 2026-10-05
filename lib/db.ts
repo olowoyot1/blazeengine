@@ -2,6 +2,16 @@ import { Pool } from 'pg';
 
 const connectionString = process.env.DATABASE_URL;
 
+type TestDatabase = {
+  query?: (text: string, params?: unknown[]) => Promise<{ rows: Row[] }>;
+  sql: (strings: TemplateStringsArray, ...values: unknown[]) => Promise<Row[]>;
+  withTx: <T>(fn: (tx: Tx) => Promise<T>) => Promise<T>;
+};
+
+function testDatabase() {
+  return (globalThis as typeof globalThis & { __LB_DB__?: TestDatabase }).__LB_DB__;
+}
+
 export const pool = new Pool({
   connectionString: connectionString || 'postgres://placeholder:placeholder@localhost:5432/placeholder',
   ssl: process.env.NODE_ENV === 'production' && connectionString ? { rejectUnauthorized: false } : false,
@@ -103,12 +113,18 @@ async function ensureApprovalSchema() {
 }
 
 export async function query(text: string, params?: unknown[]) {
+  if (testDatabase()?.query) return testDatabase()!.query!(text, params);
+  if (testDatabase()) {
+    const result = await testDatabase()!.sql(Object.assign([text], { raw: [text] }) as unknown as TemplateStringsArray, ...(params ?? []));
+    return { rows: result };
+  }
   if (!connectionString) return { rows: [] };
   await ensureApprovalSchema();
   return pool.query(text, params);
 }
 
 export async function sql(strings: TemplateStringsArray, ...values: unknown[]) {
+  if (testDatabase()) return testDatabase()!.sql(strings, ...values);
   let text = strings[0];
   const params: unknown[] = [];
   for (let i = 0; i < values.length; i += 1) {
@@ -123,6 +139,7 @@ export type Row = Record<string, any>;
 export type Tx = { query: (text: string, params?: unknown[]) => Promise<{ rows: Row[] }> };
 
 export async function withTx<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
+  if (testDatabase()) return testDatabase()!.withTx(fn);
   if (!connectionString) return fn({ query: async () => ({ rows: [] }) });
   await ensureApprovalSchema();
   const client = await pool.connect();

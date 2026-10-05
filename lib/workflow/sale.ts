@@ -446,7 +446,10 @@ export function availableSaleActions(sale: { status: string; created_by?: string
 }
 
 export async function performSaleAction(actor: Actor, saleId: string, key: string, input: Record<string, unknown>) {
-  const a = BY_KEY.get(key);
+  const actionAliases: Record<string, string> = {
+    upload_allocation_docs: 'upload_deed_of_assignment',
+  };
+  const a = BY_KEY.get(actionAliases[key] ?? key);
   if (!a) throw new WorkflowError('Unknown action');
   if (actor.role !== 'SUPER_ADMIN' && !a.roles.includes(actor.role)) throw new ForbiddenError('Your role is not permitted to do this');
   return run(actor, async ctx => {
@@ -494,6 +497,13 @@ export async function updateSale(actor: Actor, saleId: string, input: Record<str
 
 export async function createSale(actor: Actor, input: Record<string, unknown>) {
   if (actor.role !== 'SUPER_ADMIN' && !['SALES', 'SALES_MANAGER'].includes(actor.role)) throw new ForbiddenError('Only the sales team can create sales');
+  const normalizedInput = {
+    ...input,
+    estate_value: input.estate_value ?? input.amount,
+    payment_amount: input.payment_amount ?? input.amount,
+    payment_plan: input.payment_plan ?? 'OUTRIGHT',
+    transaction_type: input.transaction_type ?? 'INITIAL_DEPOSIT',
+  };
   const p = parseFields([
     { name: 'client_id', label: 'Client', type: 'text', required: true },
     { name: 'property_name', label: 'Estate / property', type: 'text', required: true },
@@ -506,7 +516,7 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
     { name: 'payment_proof_url', label: 'Payment evidence', type: 'file', uploadPurpose: 'sales_payment_evidence' },
     { name: 'payment_reference', label: 'Payment reference', type: 'text' },
     ...BENEFICIARY_FIELDS,
-  ], input);
+  ], normalizedInput);
   if (p.payment_proof_url && !p.payment_reference) throw new WorkflowError('Payment reference is required when payment evidence is uploaded');
   return run(actor, async ctx => {
     const client = await one(ctx, `select * from clients where id=$1`, [p.client_id]);

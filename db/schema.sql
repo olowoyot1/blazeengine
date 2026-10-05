@@ -24,6 +24,9 @@ CREATE TABLE IF NOT EXISTS departments(
   created_by uuid REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now()
 );
+INSERT INTO departments(name) VALUES
+  ('Sales'), ('Marketing'), ('Finance & Accounts'), ('Operations'), ('Human Resources'), ('Site Management'), ('Executive')
+ON CONFLICT (name) DO NOTHING;
 
 -- Uploaded evidence files (receipts, payment proofs, contracts, deeds, ID scans…)
 -- stored as bytes in Postgres rather than as external links, so "proof" is an
@@ -117,14 +120,8 @@ CREATE TABLE IF NOT EXISTS sales(
 
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS sale_reference text;
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS transaction_type text NOT NULL DEFAULT 'INITIAL_DEPOSIT';
-ALTER TABLE expenses ADD COLUMN IF NOT EXISTS transaction_reference text;
-ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS transaction_reference text;
 UPDATE sales SET sale_reference = 'SALE-' || to_char(created_at, 'YYYYMM') || '-' || upper(substr(replace(id::text, '-', ''), 1, 8)) WHERE sale_reference IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS sales_sale_reference_unique ON sales(sale_reference);
-UPDATE expenses SET transaction_reference = 'TXN-EXP-' || upper(substr(replace(id::text, '-', ''), 1, 12)) WHERE transaction_reference IS NULL;
-UPDATE payroll_runs SET transaction_reference = 'TXN-PAY-' || upper(substr(replace(id::text, '-', ''), 1, 12)) WHERE transaction_reference IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS expenses_transaction_reference_unique ON expenses(transaction_reference);
-CREATE UNIQUE INDEX IF NOT EXISTS payroll_transaction_reference_unique ON payroll_runs(transaction_reference);
 
 CREATE TABLE IF NOT EXISTS sale_documents(
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -368,6 +365,14 @@ CREATE TABLE IF NOT EXISTS payroll_items(
   UNIQUE(payroll_run_id, employee_id));
 CREATE INDEX IF NOT EXISTS idx_payroll_runs_status ON payroll_runs(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_payroll_items_run ON payroll_items(payroll_run_id);
+
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS transaction_reference text;
+ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS transaction_reference text;
+UPDATE expenses SET transaction_reference = 'TXN-EXP-' || upper(substr(replace(id::text, '-', ''), 1, 12)) WHERE transaction_reference IS NULL;
+UPDATE payroll_runs SET transaction_reference = 'TXN-PAY-' || upper(substr(replace(id::text, '-', ''), 1, 12)) WHERE transaction_reference IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS expenses_transaction_reference_unique ON expenses(transaction_reference);
+CREATE UNIQUE INDEX IF NOT EXISTS payroll_transaction_reference_unique ON payroll_runs(transaction_reference);
+
 CREATE TABLE IF NOT EXISTS chat_rooms(
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), room_type text NOT NULL DEFAULT 'GENERAL' CHECK (room_type IN ('GENERAL','DIRECT')), name text,
   user_a uuid REFERENCES users(id) ON DELETE CASCADE, user_b uuid REFERENCES users(id) ON DELETE CASCADE, created_by uuid REFERENCES users(id), created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(user_a,user_b));

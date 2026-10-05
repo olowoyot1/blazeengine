@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 
 const pg = new PGlite();
 (globalThis as any).__LB_DB__ = {
+  query: (text: string, params?: unknown[]) => pg.query(text, params as any),
   sql: async (strings: TemplateStringsArray, ...values: unknown[]) =>
     (await pg.query(strings.reduce((a, s, i) => a + (i ? `$${i}` : '') + s, ''), values as any[])).rows,
   withTx: (fn: any) => pg.transaction(async t => fn({ query: (text: string, params?: unknown[]) => t.query(text, params as any[]) })),
