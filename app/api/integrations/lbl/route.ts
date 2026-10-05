@@ -1,15 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query, withTx } from '@/lib/db';
-import { audit, logEvent, mailClient, notifyRoles, notifyUsers, one, performSaleAction } from '@/lib/workflow/core';
 import { performSaleAction as runSaleAction } from '@/lib/workflow/sale';
 import type { Actor } from '@/lib/workflow/core';
 
 function unauthorized() {
   return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-}
-
-function configured() {
-  return Boolean(process.env.LBL_PORTAL_INTEGRATION_SECRET);
 }
 
 async function getActor(email: string): Promise<Actor | null> {
@@ -23,7 +18,6 @@ async function getActor(email: string): Promise<Actor | null> {
 }
 
 function check(req: NextRequest) {
-  if (!configured()) return false;
   const expected = process.env.LBL_PORTAL_INTEGRATION_SECRET;
   const supplied = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
   return Boolean(expected && supplied && supplied === expected);
@@ -90,7 +84,7 @@ export async function POST(req: NextRequest) {
         await tx.query(`update sales set status='ACCOUNT_DOCS_SENT' where id=$1`, [saleId]);
         await tx.query(`insert into workflow_events(entity_type,entity_id,stage,action,from_status,to_status,actor_id,notes) values('SALE',$1,'SALES_DOCUMENTS','send_from_lbl_portal','SALES_APPROVED','ACCOUNT_DOCS_SENT',$2,$3)`, [saleId, actor.id, 'Approved generated sales documents sent from LBL Portal']);
         await tx.query(`insert into audit_logs(user_id,action,entity_type,entity_id,metadata) values($1,'LBL_PORTAL_SEND','SALE',$2,$3)`, [actor.id, saleId, JSON.stringify({ source: 'LBLPortal', document_number: sale.invoice_number })]);
-        const recipients = await tx.query(`select id,email from users where active and role = any($1::text[])`, [['OPERATIONS','OPERATIONS_MANAGER']]);
+        const recipients = await tx.query(`select id from users where active and role = any($1::text[])`, [['OPERATIONS','OPERATIONS_MANAGER']]);
         if (recipients.rows.length) {
           await tx.query(`insert into notifications(user_id,title,message,link) select unnest($1::uuid[]),$2,$3,$4`, [recipients.rows.map((r:any)=>r.id), 'Sales documents sent', `${sale.client_name} — ${sale.invoice_number} has passed second-level verification and was sent from LBL Portal.`, `/sales/${saleId}`]);
         }
