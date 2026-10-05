@@ -1,11 +1,12 @@
 import type { Role } from '../constants';
 import { ForbiddenError, WorkflowError, audit, logEvent, notifyRoles, notifyUsers, one, run, type Actor } from './core';
 import { buildAcknowledgementLetterPdf, buildContractOfSalePdf, type SaleAgreementInput } from '../pdf/saleAgreementDocuments';
-import { openRound, type Step } from './approvals';
+import { openRound, registerRound, type Step } from './approvals';
 
 type SaleRow = Record<string, any>;
 
 const GENERATORS: Role[] = ['SALES', 'SALES_MANAGER', 'ACCOUNTANT', 'FINANCE_OPERATIONS'];
+const SALE_DOCUMENTS_ROUND = 'SALE_DOCUMENTS_APPROVAL';
 
 const saleLabel = (s: SaleRow) => `${s.client_name} — ${s.plot_reference || s.property_name || 'sale'}`;
 const saleLink = (id: string) => `/sales/${id}`;
@@ -29,6 +30,32 @@ async function addDoc(ctx: any, saleId: string, type: string, url: string, name:
   );
 }
 
+registerRound(SALE_DOCUMENTS_ROUND, {
+  entity: 'SALE',
+  link: saleLink,
+  title: async (ctx, entityId) => {
+    const s = await one(ctx, `select client_name, property_name, plot_reference from sales where id=$1`, [entityId]);
+    return s ? `${saleLabel(s)} — Contract of Sale and Letter of Acknowledgement require document approval.` : 'Sale documents require approval.';
+  },
+  onComplete: async (ctx, approval) => {
+    await logEvent(ctx, 'SALE', approval.entity_id, 'SALE_DOCUMENTS', 'Sale documents approved', 'CONTRACT_PREPARED', 'CONTRACT_PREPARED', 'Contract of Sale and Letter of Acknowledgement approved.');
+    await notifyRoles(ctx, ['ACCOUNTANT', 'FINANCE_OPERATIONS', 'OPERATIONS_MANAGER'], {
+      title: 'Sale documents approved',
+      message: 'The Contract of Sale and Letter of Acknowledgement have been approved and are ready for Accounts/client dispatch.',
+      link: saleLink(approval.entity_id),
+    });
+  },
+  onReject: async (ctx, approval, comment) => {
+    await ctx.tx.query(`update sales set status='RETURNED', returned_reason=$2, updated_at=now() where id=$1`, [approval.entity_id, comment]);
+    await logEvent(ctx, 'SALE', approval.entity_id, 'SALE_DOCUMENTS', 'Sale documents returned', 'CONTRACT_PREPARED', 'RETURNED', comment || 'Sale documents returned for correction.');
+    await notifyRoles(ctx, ['SALES_MANAGER', 'ACCOUNTANT', 'FINANCE_OPERATIONS'], {
+      title: 'Sale documents returned',
+      message: comment || 'The Contract of Sale and Letter of Acknowledgement were returned for correction.',
+      link: saleLink(approval.entity_id),
+    });
+  },
+});
+
 export async function generateSaleDocuments(actor: Actor, saleId: string) {
   if (actor.role !== 'SUPER_ADMIN' && !GENERATORS.includes(actor.role)) {
     throw new ForbiddenError('Only Sales and Accounts users can generate the Contract of Sale and Letter of Acknowledgement');
@@ -37,7 +64,7 @@ export async function generateSaleDocuments(actor: Actor, saleId: string) {
   return run(actor, async ctx => {
     const s = await one(ctx, `select * from sales where id=$1 for update`, [saleId]);
     if (!s) throw new WorkflowError('Sale not found');
-    if (s.transaction_type === 'TOP_UP') throw new WorkflowError('Top-up transactions do not receive a Contract of Sale or Letter of Acknowledgement');
+    if (String(s.transaction_type ?? '').toUpperCase() === 'TOP_UP') throw new WorkflowError('Top-up transactions do not receive a Contract of Sale or Letter of Acknowledgement');
     if (!['SALES_APPROVED', 'CONTRACT_PREPARED'].includes(String(s.status))) {
       throw new WorkflowError(`Documents can only be generated after Sales Manager verification. Current status: ${String(s.status)}`);
     }
@@ -50,46 +77,28 @@ export async function generateSaleDocuments(actor: Actor, saleId: string) {
     if (existingTypes.has('CONTRACT') && existingTypes.has('ACKNOWLEDGMENT_LETTER')) {
       return { saleId, status: String(s.status), alreadyGenerated: true, documents: existing.rows };
     }
-    if (existingTypes.size) {
-      throw new WorkflowError('This sale has an incomplete existing contract/acknowledgement document set. Do not generate over it; complete the existing document record first.');
-    }
+    if (existingTypes.size) throw new WorkflowError('This sale has an incomplete existing contract/acknowledgement document set. Complete the existing document record first.');
 
     const client = s.client_id ? await one(ctx, `select phone,email,address from clients where id=$1`, [s.client_id]) : undefined;
     const agreementInput: SaleAgreementInput = {
-      clientName: String(s.client_name || 'Client'),
-      clientEmail: s.client_email ?? client?.email ?? null,
-      clientPhone: client?.phone ?? null,
-      clientAddress: client?.address ?? null,
-      beneficiaryName: s.beneficiary_name ?? null,
-      beneficiaryPhone: s.beneficiary_phone ?? null,
-      beneficiaryEmail: s.beneficiary_email ?? null,
-      beneficiaryAddress: s.beneficiary_address ?? null,
-      propertyName: s.property_name ?? null,
-      propertyLocation: s.property_name ?? null,
-      propertySize: extractSize(s),
-      plotReference: s.plot_reference ?? null,
-      saleReference: s.sale_reference ?? null,
-      transactionType: s.transaction_type ?? null,
-      paymentPlan: s.payment_plan ?? null,
-      estateValue: Number(s.estate_value ?? s.quoted_amount ?? 0),
-      amountPaid: Number(s.payment_amount ?? s.amount ?? 0),
-      paymentReference: s.payment_reference ?? null,
-      issuedAt: new Date(),
-      issuedBy: actor.name,
+      clientName: String(s.client_name || 'Client'), clientEmail: s.client_email ?? client?.email ?? null,
+      clientPhone: client?.phone ?? null, clientAddress: client?.address ?? null,
+      beneficiaryName: s.beneficiary_name ?? null, beneficiaryPhone: s.beneficiary_phone ?? null,
+      beneficiaryEmail: s.beneficiary_email ?? null, beneficiaryAddress: s.beneficiary_address ?? null,
+      propertyName: s.property_name ?? null, propertyLocation: s.property_name ?? null,
+      propertySize: extractSize(s), plotReference: s.plot_reference ?? null, saleReference: s.sale_reference ?? null,
+      transactionType: s.transaction_type ?? null, paymentPlan: s.payment_plan ?? null,
+      estateValue: Number(s.estate_value ?? s.quoted_amount ?? 0), amountPaid: Number(s.payment_amount ?? s.amount ?? 0),
+      paymentReference: s.payment_reference ?? null, issuedAt: new Date(), issuedBy: actor.name,
     };
-
     if (!(agreementInput.estateValue > 0)) throw new WorkflowError('Estate value is required before generating sale documents');
     if (!(agreementInput.amountPaid > 0)) throw new WorkflowError('Payment amount is required before generating sale documents');
 
-    const [contractPdf, acknowledgementPdf] = await Promise.all([
-      buildContractOfSalePdf(agreementInput),
-      buildAcknowledgementLetterPdf(agreementInput),
-    ]);
+    const [contractPdf, acknowledgementPdf] = await Promise.all([buildContractOfSalePdf(agreementInput), buildAcknowledgementLetterPdf(agreementInput)]);
     const contractUrl = await storePdf(ctx, `Contract-of-Sale-${s.sale_reference || s.id}.pdf`, contractPdf);
     const acknowledgementUrl = await storePdf(ctx, `Acknowledgement-Letter-${s.sale_reference || s.id}.pdf`, acknowledgementPdf);
     await addDoc(ctx, s.id, 'CONTRACT', contractUrl, 'Contract of Sale');
     await addDoc(ctx, s.id, 'ACKNOWLEDGMENT_LETTER', acknowledgementUrl, 'Letter of Acknowledgement');
-
     await ctx.tx.query(`update sales set status='CONTRACT_PREPARED', updated_at=now() where id=$1`, [s.id]);
     await ctx.tx.query(`update operations set status='DONE', completed_at=now() where sale_id=$1 and task_type='SALE_DOCUMENTS' and status='PENDING'`, [s.id]);
 
@@ -101,19 +110,14 @@ export async function generateSaleDocuments(actor: Actor, saleId: string) {
     const round = Number(s.chain_round || 0) + 1;
     const steps: Step[] = originatorRole === 'SALES_MANAGER'
       ? [{ step: 'Sales Manager approval', role: 'SALES_MANAGER', seq: 1 }]
-      : [
-          { step: 'Sales originator approval', role: 'SALES', seq: 1, userId: String(s.created_by) },
-          { step: 'Sales Manager approval', role: 'SALES_MANAGER', seq: 2 },
-        ];
-    await openRound(ctx, 'SALE', s.id, 'SALE_DOCUMENTS_APPROVAL', round, steps);
+      : [{ step: 'Sales originator approval', role: 'SALES', seq: 1, userId: String(s.created_by) }, { step: 'Sales Manager approval', role: 'SALES_MANAGER', seq: 2 }];
+    await openRound(ctx, 'SALE', s.id, SALE_DOCUMENTS_ROUND, round, steps);
 
     await logEvent(ctx, 'SALE', s.id, 'SALE_DOCUMENTS', 'Generate Contract + Acknowledgement', s.status, 'CONTRACT_PREPARED', `Generated automatically by ${actor.name}`);
     await audit(ctx, 'SALE_DOCUMENTS_GENERATED', 'SALE', s.id, { contract: contractUrl, acknowledgement: acknowledgementUrl, source: 'Sales/Accounts Generate Documents' });
-
     const n = { title: 'Contract and acknowledgement generated', message: `${saleLabel(s)} — the Contract of Sale and Letter of Acknowledgement are ready for Sales document approval.`, link: saleLink(s.id) };
     await notifyUsers(ctx, [s.created_by], n);
     await notifyRoles(ctx, ['SALES_MANAGER', 'ACCOUNTANT', 'FINANCE_OPERATIONS', 'OPERATIONS_MANAGER'], n);
-
-    return { saleId: s.id, status: 'CONTRACT_PREPARED', alreadyGenerated: false, documents: [contractUrl, acknowledgementUrl] };
+    return { saleId: s.id, status: 'CONTRACT_PREPARED', alreadyGenerated: false, documents: [{ document_type: 'CONTRACT', document_url: contractUrl }, { document_type: 'ACKNOWLEDGMENT_LETTER', document_url: acknowledgementUrl }] };
   });
 }
