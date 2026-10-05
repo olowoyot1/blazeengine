@@ -3,8 +3,9 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { requireCap } from '@/lib/guard';
 import { getClient } from '@/lib/queries';
+import { getClientSaleDocuments } from '@/lib/clientDocuments';
 import { Badge } from '@/components/Badge';
-import { naira, fmtDateTime } from '@/lib/format';
+import { naira, fmtDateTime, human } from '@/lib/format';
 import { ClientProfileForm } from './ClientProfileForm';
 
 export default async function ClientDetail({ params }: { params: Promise<{ id: string }> }) {
@@ -13,6 +14,7 @@ export default async function ClientDetail({ params }: { params: Promise<{ id: s
   const data = await getClient(id);
   if (!data) notFound();
   const { client: c, sales } = data;
+  const documents = await getClientSaleDocuments(c.id);
 
   return (
     <Shell s={s} title={c.name} kicker={c.profile_completed_at ? 'Client' : 'Client — profile incomplete'}>
@@ -21,7 +23,7 @@ export default async function ClientDetail({ params }: { params: Promise<{ id: s
       )}
       <div className="grid2">
         <div className="card">
-          <h3>Profile</h3>
+          <h3>Customer Information</h3>
           <ClientProfileForm clientId={c.id} client={c} />
         </div>
         <div className="card">
@@ -39,6 +41,60 @@ export default async function ClientDetail({ params }: { params: Promise<{ id: s
             {c.profile_completed_at && ` Profile completed ${fmtDateTime(c.profile_completed_at)}.`}
           </p>
         </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 15 }}>
+        <div className="section-title">
+          <div>
+            <h3 style={{ marginBottom: 4 }}>Customer Documents</h3>
+            <p className="muted small" style={{ margin: 0 }}>
+              Generated Contract of Sale and Letter of Acknowledgement are automatically attached to this customer profile.
+            </p>
+          </div>
+          <span className="badge">{documents.length}</span>
+        </div>
+
+        {documents.length === 0 ? (
+          <div className="empty">No generated sale documents are attached to this customer yet.</div>
+        ) : (
+          <div style={{ display: 'grid', gap: 18 }}>
+            {documents.map((d: any) => {
+              const title = d.document_type === 'CONTRACT' ? 'Contract of Sale' : 'Letter of Acknowledgement';
+              const isPdf = d.document_url && /\/api\/files\/[0-9a-f-]{36}$/i.test(String(d.document_url));
+              return (
+                <div key={d.id} className="card" style={{ margin: 0, border: '1px solid var(--border)' }}>
+                  <div className="section-title">
+                    <div>
+                      <h4 style={{ margin: 0 }}>{title}</h4>
+                      <div className="muted small" style={{ marginTop: 4 }}>
+                        {d.sale_reference || 'Sale'} · {d.property_name || 'Property'}{d.plot_reference ? ` · ${d.plot_reference}` : ''} · {fmtDateTime(d.created_at)}
+                      </div>
+                    </div>
+                    {d.document_url && (
+                      <a className="btn light" href={d.document_url} target="_blank" rel="noreferrer">View PDF</a>
+                    )}
+                  </div>
+
+                  {isPdf ? (
+                    <iframe
+                      title={title}
+                      src={d.document_url}
+                      style={{ width: '100%', height: 620, border: '1px solid var(--border)', borderRadius: 8, marginTop: 12, background: '#fff' }}
+                    />
+                  ) : (
+                    <div className="notice" style={{ marginTop: 12 }}>
+                      The document record exists, but a private PDF file is not currently attached.
+                    </div>
+                  )}
+
+                  <div className="muted small" style={{ marginTop: 8 }}>
+                    {d.document_name || human(d.document_type)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </Shell>
   );
