@@ -5,8 +5,8 @@
  *  DRAFT ──submit_payment_proof──▶ PAYMENT_PROOF_SUBMITTED        Sales team uploads payment proof
  *  ──enter_invoice──▶ INVOICE_ENTERED                             Accountant generates invoice (auto no., payment amount) → back to Sales
  *  ──approve_sale──▶ SALES_APPROVED                               Sales Manager approves → Operations receives approved sale
- *  ──create_contract──▶ CONTRACT_PREPARED                         Operations: contract + acknowledgment → back to Accounts
- *  ──send_sales_documents──▶ ACCOUNT_DOCS_SENT                    Accountant: sales order, receipt, invoice sent
+  *  ──create_contract──▶ CONTRACT_PREPARED                         Operations: contract + acknowledgement → back to Accounts
+  *  ──send_sales_documents──▶ ACCOUNT_DOCS_SENT                    Accountant: transaction-specific account documents sent
  *  ──open_ops_portal──▶ SITE_NOTIFIED                             Operations opens portal → Site Manager notified, ready for allocation (30-day clock)
  *  ──upload_deed_of_assignment──▶ OPS_DEED_UPLOADED               Operations: deed of assignment
  *  ──upload_survey_plan──────────▶ OPS_DOCS_UPLOADED                Site Manager: survey plan (within 30 days)
@@ -73,11 +73,16 @@ async function attachInvoiceAndReceipt(ctx: Ctx, s: Row, invoiceNo: string, paid
     transactionType: s.transaction_type, paymentPlan: s.payment_plan, paymentReference: s.payment_reference,
     estateValue, amountPaid: paid, issuedBy: String(actor?.name ?? 'Accounts'),
   };
+  const isTopUp = String(s.transaction_type ?? '').toUpperCase() === 'TOP_UP';
   const isOutright = String(s.payment_plan ?? '').toUpperCase() === 'OUTRIGHT';
-  const [primaryPdf, receiptPdf] = await Promise.all([
-    isOutright ? buildInvoicePdf(input) : buildSalesOrderPdf(input),
-    buildReceiptPdf(input),
-  ]);
+  const receiptPdf = await buildReceiptPdf(input);
+  if (isTopUp) {
+    const receiptNo = invoiceNo;
+    const suffix = reissued ? ` (reissued to ${s.beneficiary_name})` : '';
+    await addDoc(ctx, s.id, 'SALES_RECEIPT', await storePdf(ctx, `${receiptNo}.pdf`, receiptPdf), `Sales receipt ${receiptNo}${suffix}`);
+    return;
+  }
+  const primaryPdf = isOutright ? await buildInvoicePdf(input) : await buildSalesOrderPdf(input);
   const suffix = reissued ? ` (reissued to ${s.beneficiary_name})` : '';
   const primaryType = isOutright ? 'INVOICE' : 'SALES_ORDER';
   const primaryLabel = isOutright ? 'Invoice' : 'Sales order';
@@ -105,7 +110,7 @@ export const SALE_CHAIN: Step[] = [
   { step: 'HR internal audit', role: 'HR', seq: 3 },
   { step: 'CEO final approval', role: 'CEO', seq: 4 },
 ];
-const REQUIRED_DOCS = ['PAYMENT_PROOF', 'CONTRACT', 'ACKNOWLEDGMENT_LETTER', 'SALES_DOCUMENTS', 'DEED_OF_ASSIGNMENT', 'SURVEY_PLAN'];
+const REQUIRED_DOCS = ['PAYMENT_PROOF', 'CONTRACT', 'ACKNOWLEDGMENT_LETTER', 'DEED_OF_ASSIGNMENT', 'SURVEY_PLAN'];
 const ALL_AFTER_APPROVAL = ['SITE_NOTIFIED', 'OPS_DOCS_UPLOADED', 'IN_APPROVAL', 'RETURNED', 'FULLY_APPROVED', 'PRE_ALLOCATION', 'ALLOCATION_SCHEDULED'];
 
 const reason: Field = { name: 'reason', label: 'Reason', type: 'textarea', required: true };
@@ -179,11 +184,13 @@ export const SALE_ACTIONS: SaleAction[] = [
       const paid = Number(s.payment_amount ?? 0);
       if (!(paid > 0)) throw new WorkflowError('No payment amount is recorded on this sale — ask Sales to update the payment amount before generating the invoice');
       if (s.invoice_number) throw new WorkflowError(`Invoice ${s.invoice_number} has already been generated for this sale`);
-      const numberPrefix = String(s.payment_plan ?? '').toUpperCase() === 'OUTRIGHT' ? 'INV-' : 'SO-';
+      const transactionType = String(s.transaction_type ?? '').toUpperCase();
+      const paymentPlan = String(s.payment_plan ?? '').toUpperCase();
+      const numberPrefix = transactionType === 'TOP_UP' ? 'RCT-' : paymentPlan === 'OUTRIGHT' ? 'INV-' : 'SO-';
       const gen = (await one(ctx, `select $1 || to_char(now(), 'YYYYMM') || '-' || lpad(nextval('invoice_number_seq')::text, 6, '0') as no`, [numberPrefix]))!;
       const invoiceNo = String(gen.no);
-      await ctx.tx.query(`update sales set invoice_number=$2, amount=$3, payment_status='VERIFIED', invoice_variance_reason=null where id=$1`,
-        [s.id, invoiceNo, paid]);
+      await ctx.tx.query(`update sales set invoice_number=$2, sales_receipt_no=case when $4='TOP_UP' then $2 else sales_receipt_no end, amount=$3, payment_status='VERIFIED', invoice_variance_reason=null where id=$1`,
+        [s.id, invoiceNo, paid, transactionType]);
       await attachInvoiceAndReceipt(ctx, s, invoiceNo, paid);
       const note = i.note ? ` Note: ${i.note}` : '';
       const n = { title: 'Invoice generated – sale awaiting approval', message: `${saleLabel(s)} — invoice ${invoiceNo} for ${money(paid)} (payment made).${note}`, link: saleLink(s) };
@@ -220,15 +227,15 @@ export const SALE_ACTIONS: SaleAction[] = [
     },
   },
   {
-    key: 'skip_topup_documents', label: 'Record top-up — no sale documents',
-    help: 'Top-up transactions do not require a Contract of Sale, Letter of Acknowledgment or Sales Documents bundle.',
+    key: 'skip_topup_documents', label: 'Continue top-up to allocation',
+    help: 'Top-ups receive only a sales receipt; no contract, acknowledgement, invoice or sales order is required.',
     roles: OPS, from: ['SALES_APPROVED'], to: 'SITE_NOTIFIED',
     fields: [{ name: 'note', label: 'Note (optional)', type: 'textarea' }],
     async apply(ctx, s, i) {
       if (s.transaction_type !== 'TOP_UP') throw new WorkflowError('This shortcut is only available for top-up transactions');
       await ctx.tx.query(`update sales set ops_due_date = current_date + ${ALLOCATION_WINDOW_DAYS} where id=$1`, [s.id]);
       await openTask(ctx, s.id, 'ALLOCATION_DOCS', ALLOCATION_WINDOW_DAYS, 'Deed of assignment + survey plan');
-      await notifyRoles(ctx, ['SITE_MANAGER'], { title: 'Top-up ready for allocation', message: `${saleLabel(s)}. No sale documents are required for this top-up.${i.note ? ` ${i.note}` : ''}`, link: saleLink(s) });
+      await notifyRoles(ctx, ['SITE_MANAGER'], { title: 'Top-up ready for allocation', message: `${saleLabel(s)}. The sales receipt has been issued; no invoice or sales order is required.${i.note ? ` ${i.note}` : ''}`, link: saleLink(s) });
     },
   },
   {
@@ -257,25 +264,38 @@ export const SALE_ACTIONS: SaleAction[] = [
     },
   },
   {
-    key: 'send_sales_documents', label: 'Prepare & send sales documents',
-    help: 'Prepare the sales order, sales receipt and sales invoice and send them. Operations is notified.',
+    key: 'send_sales_documents', label: 'Send account documents',
+    help: 'Record the account document numbers already generated for this transaction and send them. Operations is notified.',
     roles: ['ACCOUNTANT'], from: ['CONTRACT_PREPARED'], to: 'ACCOUNT_DOCS_SENT',
     fields: [
-      { name: 'sales_order_no', label: 'Sales order no.', type: 'text', required: true },
+      { name: 'sales_order_no', label: 'Sales order no. (installment only)', type: 'text' },
       { name: 'sales_receipt_no', label: 'Sales receipt no.', type: 'text', required: true },
-      { name: 'sales_invoice_no', label: 'Sales invoice no.', type: 'text', required: true },
-      { name: 'documents_url', label: 'Documents bundle (optional)', type: 'file' },
+      { name: 'sales_invoice_no', label: 'Sales invoice no. (outright only)', type: 'text' },
     ],
     async apply(ctx, s, i) {
       const documentApprovals = await one(ctx, `select count(*)::int as n from approvals where entity_type='SALE' and entity_id=$1 and round='SALE_DOCUMENTS_APPROVAL' and status='APPROVED'`, [s.id]);
       if (Number(documentApprovals?.n || 0) < 2) throw new WorkflowError('Sales originator and Sales Manager must approve the Operations documents first');
+      const transactionType = String(s.transaction_type ?? '').toUpperCase();
+      const paymentPlan = String(s.payment_plan ?? '').toUpperCase();
+      if (!i.sales_receipt_no) throw new WorkflowError('A sales receipt number is required');
+      if (transactionType === 'TOP_UP') {
+        if (i.sales_order_no || i.sales_invoice_no) throw new WorkflowError('Top-ups only receive a sales receipt');
+      } else if (paymentPlan === 'OUTRIGHT') {
+        if (!i.sales_invoice_no || i.sales_order_no) throw new WorkflowError('Outright purchases require an invoice and sales receipt only');
+      } else if (!i.sales_order_no || i.sales_invoice_no) {
+        throw new WorkflowError('Installmental purchases require a sales order and sales receipt only');
+      }
       await ctx.tx.query(`update sales set sales_order_no=$2, sales_receipt_no=$3, sales_invoice_no=$4 where id=$1`,
-        [s.id, i.sales_order_no, i.sales_receipt_no, i.sales_invoice_no]);
-      await addDoc(ctx, s.id, 'SALES_DOCUMENTS', i.documents_url, 'Sales order, receipt & invoice');
+        [s.id, i.sales_order_no || null, i.sales_receipt_no, i.sales_invoice_no || null]);
       await notifyRoles(ctx, OPS, { title: 'Sales documents sent', message: `${saleLabel(s)}. Open the operations portal for allocation.`, link: saleLink(s) });
       await notifyUsers(ctx, [s.created_by], { title: 'Sales documents sent to client', message: saleLabel(s), link: saleLink(s) });
-      mailClient(ctx, s.client_email, 'Your Landblaze sales documents',
-        `Dear ${s.client_name},\n\nYour sales order (${i.sales_order_no}), sales receipt (${i.sales_receipt_no}) and sales invoice (${i.sales_invoice_no}) have been issued.${i.documents_url ? `\n\nView: ${i.documents_url}` : ''}\n\nLandblaze`);
+      const accountDocuments = [
+        i.sales_invoice_no ? `sales invoice (${i.sales_invoice_no})` : null,
+        i.sales_order_no ? `sales order (${i.sales_order_no})` : null,
+        `sales receipt (${i.sales_receipt_no})`,
+      ].filter(Boolean).join(' and ');
+      mailClient(ctx, s.client_email, 'Your Landblaze account documents',
+        `Dear ${s.client_name},\n\nYour ${accountDocuments} have been issued.\n\nLandblaze`);
     },
   },
   {

@@ -2,17 +2,15 @@ import Shell from '@/components/Shell';
 import { requireCap } from '@/lib/guard';
 import { listSales, listExpenses } from '@/lib/queries';
 import { WorkQueue } from '@/components/WorkQueue';
-import { GenerateSaleDocumentsButton } from '@/components/GenerateSaleDocumentsButton';
 import { naira } from '@/lib/format';
 import { Badge } from '@/components/Badge';
 import Link from 'next/link';
 
 export default async function Accounts() {
   const s = await requireCap('accounts.workspace');
-  const [proof, invoiced, approvedForDocuments, contracted, negApproved, expEntered] = await Promise.all([
+  const [proof, invoiced, contracted, negApproved, expEntered] = await Promise.all([
     listSales(s, { status: 'PAYMENT_PROOF_SUBMITTED' }),
     listSales(s, { statuses: ['INVOICE_ENTERED'] }),
-    listSales(s, { status: 'SALES_APPROVED' }),
     listSales(s, { status: 'CONTRACT_PREPARED' }),
     listExpenses(s, ['NEGOTIATION_APPROVED']),
     listExpenses(s, ['PAID']),
@@ -24,25 +22,6 @@ export default async function Accounts() {
         <WorkQueue title="Awaiting Sales Manager approval" sales={invoiced} emptyLabel="Nothing waiting." />
       </div>
 
-      <div className="card" style={{ marginTop: 15 }}>
-        <div className="section-title"><h3>Sales approved → Generate Contract + Acknowledgement</h3><span className="badge">{approvedForDocuments.length}</span></div>
-        {approvedForDocuments.length === 0 ? <div className="empty">Nothing waiting.</div> : (
-          <div className="table-wrap"><table className="table"><thead><tr><th>Client</th><th>Property</th><th>Payment</th><th>Reference</th><th></th></tr></thead>
-            <tbody>{approvedForDocuments.map((sale: any) => (
-              <tr key={sale.id}>
-                <td>{sale.client_name}</td>
-                <td>{sale.property_name || '—'} {sale.plot_reference ? `· ${sale.plot_reference}` : ''}</td>
-                <td>{naira(sale.payment_amount ?? sale.amount)}</td>
-                <td>{sale.sale_reference || '—'}</td>
-                <td style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <GenerateSaleDocumentsButton saleId={sale.id} status={sale.status} role={s.role} compact />
-                  <Link className="btn light" href={`/sales/${sale.id}`}>Open</Link>
-                </td>
-              </tr>
-            ))}</tbody>
-          </table></div>
-        )}
-      </div>
 
       <div className="card" style={{ marginTop: 15 }}>
         <div className="section-title"><h3>Zoho Books</h3><a className="btn" href="https://landblaze.oaatz.com" target="_blank" rel="noreferrer">Post</a></div>
