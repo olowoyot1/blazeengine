@@ -7,10 +7,11 @@ import { ApprovalDecisionPanel } from '@/components/ApprovalDecisionPanel';
 import { naira, fmtDateTime, human } from '@/lib/format';
 import { availableSaleActions, canChangeBeneficiary } from '@/lib/workflow/sale';
 import { ChangeBeneficiaryForm } from './ChangeBeneficiaryForm';
-import { SALE_STATUS_ORDER, SALE_STATUS_LABEL } from '@/lib/constants';
+import { SALE_STATUS_LABEL } from '@/lib/constants';
 import { SaleActionPanel } from './SaleActionPanel';
 import { EditSaleForm } from './EditSaleForm';
 import { DeleteTransaction } from '@/components/DeleteTransaction';
+import { GenerateSaleDocumentsButton } from '@/components/GenerateSaleDocumentsButton';
 
 const MAIN_LINE = ['PENDING_SALES_APPROVAL', 'DRAFT', 'PAYMENT_PROOF_SUBMITTED', 'INVOICE_ENTERED', 'SALES_APPROVED', 'CONTRACT_PREPARED', 'ACCOUNT_DOCS_SENT', 'SITE_NOTIFIED', 'OPS_DOCS_UPLOADED', 'IN_APPROVAL', 'FULLY_APPROVED', 'PRE_ALLOCATION', 'ALLOCATION_SCHEDULED', 'ALLOCATED'];
 
@@ -61,6 +62,7 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
 
         <div className="card">
           <h3>Your action</h3>
+          <GenerateSaleDocumentsButton saleId={sale.id} status={sale.status} role={s.role} />
           <SaleActionPanel saleId={sale.id} actions={actions} />
           {documentsApproved && <a className="btn green" href="https://landblaze.oaatz.com" target="_blank" rel="noreferrer" style={{ display: 'inline-block', marginTop: 12 }}>Open Landblaze Portal</a>}
         </div>
