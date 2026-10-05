@@ -4,8 +4,7 @@ export type ClientSaleRow = Record<string, any>;
 
 /**
  * Full customer sales history with the latest workflow activity, pending approval,
- * and pending operations task so the customer profile can proactively show what
- * should happen next.
+ * pending operations task and the durable next action assigned to the sale.
  */
 export async function getClientSales(clientId: string): Promise<ClientSaleRow[]> {
   if (!/^[0-9a-f-]{36}$/i.test(clientId)) return [];
@@ -22,9 +21,18 @@ export async function getClientSales(clientId: string): Promise<ClientSaleRow[]>
       pa.created_at pending_approval_at,
       ot.task_type pending_task_type,
       ot.due_date pending_task_due_date,
-      ot.notes pending_task_notes
+      ot.notes pending_task_notes,
+      na.action_key next_action_key,
+      na.title next_action_title,
+      na.owner_role next_action_owner_role,
+      na.owner_user_id next_action_owner_user_id,
+      nu.name next_action_owner_name,
+      na.due_date next_action_due_date,
+      na.updated_at next_action_updated_at
     from sales s
     left join users u on u.id=s.created_by
+    left join sale_next_actions na on na.sale_id=s.id
+    left join users nu on nu.id=na.owner_user_id
     left join lateral (
       select e.created_at, e.action, e.message
       from workflow_events e
