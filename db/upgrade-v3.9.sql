@@ -1,6 +1,6 @@
 -- Blaze Engine v3.9
--- Financial records are append-only. Corrections/cancellations must use the
--- existing workflow/reversal mechanisms; direct DELETE is prohibited at DB level.
+-- Financial records are append-only. Authentication failures are also rate-limited
+-- by a durable hashed client IP so serverless instances cannot bypass the limit.
 -- Safe to run repeatedly.
 
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS voided_at timestamptz;
@@ -29,3 +29,11 @@ DROP TRIGGER IF EXISTS trg_prevent_expenses_delete ON expenses;
 CREATE TRIGGER trg_prevent_expenses_delete
 BEFORE DELETE ON expenses
 FOR EACH ROW EXECUTE FUNCTION prevent_financial_delete();
+
+CREATE TABLE IF NOT EXISTS auth_rate_limits(
+  key_hash text PRIMARY KEY,
+  window_started_at timestamptz NOT NULL DEFAULT now(),
+  failures integer NOT NULL DEFAULT 0,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_auth_rate_limits_updated_at ON auth_rate_limits(updated_at);
