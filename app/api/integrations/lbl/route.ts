@@ -1,0 +1,107 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { query, withTx } from '@/lib/db';
+import { audit, logEvent, mailClient, notifyRoles, notifyUsers, one, performSaleAction } from '@/lib/workflow/core';
+import { performSaleAction as runSaleAction } from '@/lib/workflow/sale';
+import type { Actor } from '@/lib/workflow/core';
+
+function unauthorized() {
+  return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+}
+
+function configured() {
+  return Boolean(process.env.LBL_PORTAL_INTEGRATION_SECRET);
+}
+
+async function getActor(email: string): Promise<Actor | null> {
+  const rows = await query(
+    `select id, name, role from users where active and lower(email)=lower($1) limit 1`,
+    [email],
+  );
+  const u = rows.rows[0] as any;
+  if (!u) return null;
+  return { id: String(u.id), name: String(u.name), role: u.role } as Actor;
+}
+
+function check(req: NextRequest) {
+  if (!configured()) return false;
+  const expected = process.env.LBL_PORTAL_INTEGRATION_SECRET;
+  const supplied = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
+  return Boolean(expected && supplied && supplied === expected);
+}
+
+export async function GET(req: NextRequest) {
+  if (!check(req)) return unauthorized();
+  const status = req.nextUrl.searchParams.get('status') || 'PAYMENT_PROOF_SUBMITTED,INVOICE_ENTERED,SALES_APPROVED';
+  const statuses = status.split(',').map(s => s.trim()).filter(Boolean);
+  const result = await query(
+    `select id, sale_reference, status, client_name, client_email, property_name, plot_reference,
+            estate_value, payment_amount, payment_plan, payment_status, payment_reference,
+            invoice_number, sales_order_no, sales_receipt_no, sales_invoice_no, created_at
+       from sales
+      where status = any($1::text[])
+      order by created_at desc
+      limit 100`,
+    [statuses],
+  );
+  return NextResponse.json({ sales: result.rows });
+}
+
+export async function POST(req: NextRequest) {
+  if (!check(req)) return unauthorized();
+  try {
+    const body = await req.json();
+    const action = String(body?.action || '');
+    const saleId = String(body?.saleId || '');
+    const email = String(body?.email || '').trim();
+    if (!saleId || !email) return NextResponse.json({ error: 'saleId and email are required' }, { status: 400 });
+
+    const actor = await getActor(email);
+    if (!actor) return NextResponse.json({ error: 'No active Blaze Engine user matches this LBL Portal account' }, { status: 403 });
+
+    if (action === 'generate') {
+      if (!['ACCOUNTANT', 'FINANCE_OPERATIONS', 'SUPER_ADMIN'].includes(actor.role)) {
+        return NextResponse.json({ error: 'Only Accounts users can generate sales documents' }, { status: 403 });
+      }
+      const result = await runSaleAction(actor, saleId, 'enter_invoice', { note: 'Generated from LBL Portal' });
+      return NextResponse.json({ ok: true, action, result });
+    }
+
+    if (action === 'sales_verify') {
+      if (!['SALES_MANAGER', 'SUPER_ADMIN'].includes(actor.role)) {
+        return NextResponse.json({ error: 'Only Sales Managers can perform second-level sales verification' }, { status: 403 });
+      }
+      const result = await runSaleAction(actor, saleId, 'approve_sale', { note: 'Second-level verification completed from LBL Portal' });
+      return NextResponse.json({ ok: true, action, result });
+    }
+
+    if (action === 'send_to_client') {
+      if (!['ACCOUNTANT', 'FINANCE_OPERATIONS', 'SUPER_ADMIN'].includes(actor.role)) {
+        return NextResponse.json({ error: 'Only Accounts users can send approved documents' }, { status: 403 });
+      }
+      const result = await withTx(async tx => {
+        const sale = (await tx.query(`select * from sales where id=$1 for update`, [saleId])).rows[0] as any;
+        if (!sale) throw new Error('Sale not found');
+        if (sale.status !== 'SALES_APPROVED') throw new Error(`Sale is ${sale.status}; it must be Sales Approved before sending`);
+        if (!sale.invoice_number) throw new Error('No generated invoice or sales order exists for this sale');
+        const docs = (await tx.query(`select document_type, document_url, document_name from sale_documents where sale_id=$1 order by created_at`, [saleId])).rows as any[];
+        const hasReceipt = docs.some(d => d.document_type === 'SALES_RECEIPT');
+        const hasPrimary = docs.some(d => d.document_type === 'INVOICE' || d.document_type === 'SALES_ORDER');
+        if (!hasReceipt || !hasPrimary) throw new Error('Generated sales documents are incomplete');
+        await tx.query(`update sales set status='ACCOUNT_DOCS_SENT' where id=$1`, [saleId]);
+        await tx.query(`insert into workflow_events(entity_type,entity_id,stage,action,from_status,to_status,actor_id,notes) values('SALE',$1,'SALES_DOCUMENTS','send_from_lbl_portal','SALES_APPROVED','ACCOUNT_DOCS_SENT',$2,$3)`, [saleId, actor.id, 'Approved generated sales documents sent from LBL Portal']);
+        await tx.query(`insert into audit_logs(user_id,action,entity_type,entity_id,metadata) values($1,'LBL_PORTAL_SEND','SALE',$2,$3)`, [actor.id, saleId, JSON.stringify({ source: 'LBLPortal', document_number: sale.invoice_number })]);
+        const recipients = await tx.query(`select id,email from users where active and role = any($1::text[])`, [['OPERATIONS','OPERATIONS_MANAGER']]);
+        if (recipients.rows.length) {
+          await tx.query(`insert into notifications(user_id,title,message,link) select unnest($1::uuid[]),$2,$3,$4`, [recipients.rows.map((r:any)=>r.id), 'Sales documents sent', `${sale.client_name} — ${sale.invoice_number} has passed second-level verification and was sent from LBL Portal.`, `/sales/${saleId}`]);
+        }
+        return { saleId, status: 'ACCOUNT_DOCS_SENT', documentNumber: sale.invoice_number, clientEmail: sale.client_email || null };
+      });
+      return NextResponse.json({ ok: true, action, result });
+    }
+
+    return NextResponse.json({ error: 'Unknown integration action' }, { status: 400 });
+  } catch (error: any) {
+    console.error('LBL integration error', error);
+    return NextResponse.json({ error: error?.message || 'Integration failed' }, { status: 400 });
+  }
+}
