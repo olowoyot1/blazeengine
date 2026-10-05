@@ -5,6 +5,7 @@ import { startSession } from '@/lib/auth';
 
 const MAX_ATTEMPTS = 5;
 const LOCK_MINUTES = 15;
+const GENERIC_FAILURE = 'Invalid credentials';
 
 export async function POST(req: Request) {
   let body: any;
@@ -12,31 +13,33 @@ export async function POST(req: Request) {
   const identifier = String(body?.identifier ?? body?.email ?? '').trim();
   const secret = String(body?.secret ?? body?.password ?? '');
   const mode = body?.mode === 'password' ? 'password' : 'pin';
-  if (!identifier || !secret) return NextResponse.json({ error: mode === 'pin' ? 'Username and PIN are required' : 'Email and password are required' }, { status: 400 });
+  if (!identifier || !secret) return NextResponse.json({ error: GENERIC_FAILURE }, { status: 401 });
+
   let rows;
   try {
     rows = mode === 'pin'
       ? await sql`select * from users where lower(username)=lower(${identifier}) and active limit 1`
       : await sql`select * from users where lower(email)=lower(${identifier}) and active limit 1`;
   } catch { return NextResponse.json({ error: 'The database is not reachable. Check DATABASE_URL and try again.' }, { status: 503 }); }
+
   const u = rows[0];
-  if (mode === 'password' && u?.pin_hash) return NextResponse.json({ error: 'This account already uses username + PIN. Use your PIN to sign in.' }, { status: 400 });
-  if (mode === 'pin' && !u?.pin_hash) return NextResponse.json({ error: 'First-time setup is required. Sign in with your email and password.' }, { status: 400 });
   const dummyHash = '$2b$12$CwTycUXWue0Thq9StjUM0uJ8kTGXG9m2N9nzL3HrfoWFPd6IUZKQC';
-  if (u?.locked_until && new Date(u.locked_until) > new Date()) {
-    const mins = Math.ceil((new Date(u.locked_until).getTime() - Date.now()) / 60000);
-    return NextResponse.json({ error: `Account temporarily locked. Try again in ${mins} minute${mins === 1 ? '' : 's'}.` }, { status: 423 });
-  }
+  const locked = !!u?.locked_until && new Date(u.locked_until) > new Date();
   const hash = mode === 'pin' ? (u?.pin_hash ?? dummyHash) : (u?.password_hash ?? dummyHash);
-  const ok = await bcrypt.compare(secret, hash);
-  if (!u || !ok || (mode === 'pin' && !u.username)) {
-    if (u) {
-      const attempts = (u.failed_attempts ?? 0) + 1; const lock = attempts >= MAX_ATTEMPTS;
+
+  // Always perform a password-hash comparison before returning an authentication
+  // failure. Do not reveal whether the account exists, which login mode it uses,
+  // or whether it is currently locked.
+  const ok = !locked && await bcrypt.compare(secret, hash);
+  if (!u || !ok || (mode === 'pin' && !u.username) || (mode === 'password' && !!u.pin_hash)) {
+    if (u && !locked) {
+      const attempts = (u.failed_attempts ?? 0) + 1;
+      const lock = attempts >= MAX_ATTEMPTS;
       await sql`update users set failed_attempts=${attempts}, locked_until=${lock ? new Date(Date.now() + LOCK_MINUTES * 60000).toISOString() : null} where id=${u.id}`;
-      if (lock) return NextResponse.json({ error: `Too many failed attempts. Account locked for ${LOCK_MINUTES} minutes.` }, { status: 423 });
     }
-    return NextResponse.json({ error: mode === 'pin' ? 'Invalid username or PIN' : 'Invalid email or password' }, { status: 401 });
+    return NextResponse.json({ error: GENERIC_FAILURE }, { status: 401 });
   }
+
   await sql`update users set failed_attempts=0, locked_until=null where id=${u.id}`;
   await startSession(u.id, Number(u.session_version ?? 0));
   await sql`insert into audit_logs(user_id,action,entity_type,entity_id,metadata) values(${u.id},${mode === 'pin' ? 'LOGIN_PIN' : 'LOGIN'},'USER',${u.id},${JSON.stringify({ mode })})`;
