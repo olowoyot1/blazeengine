@@ -1,0 +1,52 @@
+import { sql } from './db';
+
+export type ClientSaleRow = Record<string, any>;
+
+/**
+ * Full customer sales history with the latest workflow activity, pending approval,
+ * and pending operations task so the customer profile can proactively show what
+ * should happen next.
+ */
+export async function getClientSales(clientId: string): Promise<ClientSaleRow[]> {
+  if (!/^[0-9a-f-]{36}$/i.test(clientId)) return [];
+
+  return sql`
+    select
+      s.*,
+      u.name creator,
+      le.created_at last_activity_at,
+      le.action last_activity_action,
+      le.message last_activity_message,
+      pa.step pending_approval_step,
+      pa.approver_role pending_approval_role,
+      pa.created_at pending_approval_at,
+      ot.task_type pending_task_type,
+      ot.due_date pending_task_due_date,
+      ot.notes pending_task_notes
+    from sales s
+    left join users u on u.id=s.created_by
+    left join lateral (
+      select e.created_at, e.action, e.message
+      from workflow_events e
+      where e.entity_type='SALE' and e.entity_id=s.id
+      order by e.created_at desc
+      limit 1
+    ) le on true
+    left join lateral (
+      select a.step, a.approver_role, a.created_at
+      from approvals a
+      where a.entity_type='SALE' and a.entity_id=s.id and a.status='PENDING'
+      order by a.round_no, a.seq, a.created_at
+      limit 1
+    ) pa on true
+    left join lateral (
+      select o.task_type, o.due_date, o.notes
+      from operations o
+      where o.sale_id=s.id and o.status='PENDING'
+      order by o.due_date nulls last, o.created_at
+      limit 1
+    ) ot on true
+    where s.client_id=${clientId}::uuid
+    order by s.created_at desc
+  `;
+}
