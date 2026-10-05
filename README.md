@@ -10,6 +10,23 @@ could do what, when, or in what order). v3 implements the full state machine,
 the approval chain, notifications, and least-privilege access — verified by an
 automated test suite that runs the entire process end-to-end.
 
+## Security notice
+
+**Never commit a production password, password hash, database credential, API key,
+AUTH_SECRET, or other secret to this repository.** The previous bootstrap
+administrator credential has been removed from the repository. If that credential
+was ever used in a deployed environment, rotate the account password immediately.
+
+Create bootstrap users with a locally generated bcrypt hash instead:
+
+```bash
+npm run hash -- 'YourStrongPassword1' admin@landblaze.com "Super Administrator"
+```
+
+Run the generated SQL against Neon, then change the password after the first login.
+For production, set a strong random `AUTH_SECRET` in Vercel and never put it in
+source control.
+
 ## What changed vs the uploaded codebase (v2)
 
 | Area | v2 | v3 |
@@ -46,9 +63,7 @@ what a role may do).
 
 See the header comment in `lib/workflow/sale.ts` and `lib/workflow/expense.ts` —
 each documents which row(s) of the process sheet it implements and traces the
-exact hand-offs ("on submission, redirects back to sales manager and the sales
-executive", "Ops and HR approved first", etc.) from the sheet into code and
-into the automated tests (`tests/workflow.test.ts`).
+exact hand-offs ("on submission, redirects back to sales manager and the sales executive", etc.) from the sheet into code and into the automated tests (`tests/workflow.test.ts`).
 
 Sales: `DRAFT → PAYMENT_PROOF_SUBMITTED → INVOICE_ENTERED → SALES_APPROVED →
 CONTRACT_PREPARED → ACCOUNT_DOCS_SENT → SITE_NOTIFIED → OPS_DOCS_UPLOADED →
@@ -61,227 +76,87 @@ RECEIPT_ISSUED`.
 
 ## Architecture
 
-- **Next.js 15 App Router**, deployed as a normal Vercel serverless app (no VPS,
-  no always-on Node process, no Redis, no background worker/cron).
+- **Next.js 15 App Router**, deployed as a normal Vercel serverless app.
 - **Neon serverless Postgres.** Reads go over Neon's stateless HTTP driver;
   every state-changing action runs in a real transaction over a short-lived
   pooled WebSocket connection (`lib/db.ts`), so a partial failure can never
   leave a sale half-updated.
-- **Server Actions** (`lib/actions.ts`) are the only way the UI mutates data —
-  there is no public REST surface to attack beyond `/api/auth`.
+- **Server Actions** (`lib/actions.ts`) are the primary UI mutation path.
 - **One workflow engine, reused everywhere.** `lib/workflow/core.ts` and
   `lib/workflow/approvals.ts` provide field validation, transactions, audit
   logging and notifications; `sale.ts` / `expense.ts` / `leads.ts` declare each
   process as data (`roles`, `from`, `to`, `fields`, `apply`) so the UI, the
-  server-side authorization check, and the tests all read from the same
-  definition — a role or a status can't drift out of sync between the button
-  the user sees and the check the server enforces.
-- **Middleware** (`middleware.ts`) rejects any unauthenticated request before
-  it reaches a page. Every page additionally calls `requireCap()` so
-  capabilities are enforced twice (defence in depth), and every list/detail
-  query is scoped by role at the SQL level (`lib/rbac.ts` → `saleScope` /
-  `expenseScope`) so a Finance Operations user's query can never even see a
-  row of `sales`.
+  server-side authorization check, and the tests read from the same definition.
+- **Middleware** rejects unauthenticated requests before they reach pages. Every
+  page additionally calls `requireCap()` and list/detail queries are scoped by
+  role at the SQL level (`lib/rbac.ts` → `saleScope` / `expenseScope`).
 
-## v3.2 — real file uploads, client profiles, departments, SUPER_ADMIN, performance reporting
-
-Five feature additions on top of v3.1:
-
-- **Real file uploads, not links.** Every document field that used to accept a URL
-  (payment proof, contract, deed, deed of assignment, survey plan, soft copy, bank
-  payment screenshot, receipt, negotiation support docs) now uploads an actual PDF,
-  PNG or JPEG (max 4MB) through `/api/files`, stored as bytes in Postgres
-  (`uploaded_files` table) and served back through `/api/files/[id]`, which requires
-  a signed-in session. Nobody can type a link as "proof" anymore — this also fully
-  closes the "evidence is just an unverified URL" gap noted in the v3.1 review.
-- **Client profiles.** Converting a lead now takes you straight to `/clients/[id]`
-  with a profile form: address, date of birth, occupation, employer, means of ID +
-  number, alternate phone, next of kin. The Leads page flags each client as
-  "Complete" or "Incomplete" so nothing gets missed.
-- **Managed departments.** Admins can add or retire departments from **Users &
-  Roles** instead of the department field being free text — new users pick from
-  that list.
-- **SUPER_ADMIN — an admin hierarchy.** A plain `ADMIN` can create, promote,
-  deactivate, or reset the password of any ordinary staff account, but **cannot**
-  touch another `ADMIN` or `SUPER_ADMIN` account at all — only a `SUPER_ADMIN` can.
-  This closes the "one admin can quietly take over another admin's account" gap
-  from the v3.1 review: that authority now sits with a smaller, higher tier instead
-  of every admin equally. The seeded bootstrap account (`db/seed-admin.sql`) is now
-  `SUPER_ADMIN`, not `ADMIN`, so you have that authority from the first login.
-- **Staff & company performance reporting.** New "Staff performance" (sales closed,
-  approval throughput and turnaround, leads captured/converted, general activity —
-  per person) and "Company performance" (total/monthly revenue, lead→sale
-  conversion rate, average sale cycle time, 48h approval-SLA compliance) sections
-  at the top of Reports, visible to `SUPER_ADMIN`, `ADMIN`, `CEO` and `HR`.
-
-**If you already deployed** (per the steps below), re-run the updated
-`db/schema.sql` in the Neon SQL Editor — it's idempotent and only adds what's
-missing (new tables, new columns, and widens the `users.role` check constraint to
-allow `SUPER_ADMIN`). Your existing `admin@landblaze.com` account keeps whatever
-role it currently has; it does **not** get automatically upgraded to `SUPER_ADMIN` —
-if you want that, run this once in the Neon SQL Editor:
-```sql
-update users set role = 'SUPER_ADMIN' where email = 'admin@landblaze.com';
-```
-
-## v3.1 — fixes for gaps found in review
-
-A follow-up review of v3.0 surfaced six real gaps, each verified against the code
-and then closed (with a regression test per fix, in `tests/workflow.test.ts` under
-"Hardening fixes"):
-
-| Gap | Fix |
-|---|---|
-| A stolen session cookie kept working after the password was changed or reset — sessions only checked user id, never the password | `users.session_version`: bumped on every password change/reset; the JWT carries the version it was issued under, so a bump instantly invalidates every other already-issued cookie for that account. The user's own current session is reissued so they aren't logged out by their own password change. |
-| An administrator could reset any user's password (including CEO/HR) and use the account with no accountability trail | `resetUserPassword` and role changes onto approval-critical roles now require a written reason (kept in `audit_logs`) and e-mail the affected user, so takeover or escalation is visible to the person it happened to, not just the admin doing it |
-| The Sales Manager who approved a sale earlier could also complete the chain's "Sales Manager approval" step on the same sale — same person signing off twice under two hats | `sales.gate_approved_by` records who ran `approve_sale`; the approval engine's new `conflict` hook blocks that same person from later deciding the chain's Sales Manager step |
-| An Accountant's invoice amount was never checked against what the Sales Executive originally quoted | `sales.quoted_amount` is captured at sale creation; `enter_invoice` requires a written reason for any difference over 2%, and flags it in the notification to the Sales Manager |
-| An expense could be inflated to any amount above the negotiated price by supplying any non-empty "reason" text | A hard ceiling: more than 50% above the negotiated amount is rejected outright and must go back through a fresh negotiation instead |
-| Rejecting an expense (or a vendor negotiation) was a dead end — the only way forward was starting over from scratch, discarding all the negotiated/entered detail | A rejected *negotiated* expense now recovers to `NEGOTIATION_APPROVED` for the Accountant to correct and re-enter; a rejected negotiation gets a new `revise_negotiation` action for the Site Manager to correct terms and resubmit for a fresh review round |
-| "Evidence" documents were unverified URLs — the same link could be pasted as proof more than once | Payment proof, bank payment proof and receipt links are checked against every other use of that exact link anywhere in the system and rejected if reused. (This is a partial mitigation only — it cannot verify a link's actual content, since there is no file-storage integration in this build.) |
-
-One gap from the review is **not** fixed here because it isn't really fixable in
-code: documents are links, not uploaded/verified files, so the system can never be
-fully sure a "proof" link shows what it claims to. The duplicate-link check above
-catches the laziest form of reuse but not a determined fabrication — closing this
-properly needs real file storage with checksums, which is a larger, separate
-feature.
-
-## Security / rights hardening in this version
+## Security / rights hardening
 
 - Session cookie carries only a user id; role, department and active flag are
   re-read from the database on every request (`lib/auth.ts`), so deactivating
-  a user or changing their role takes effect on their very next request.
-- Login lockout after 5 failed attempts (15 minutes), constant-shape response
-  to prevent user enumeration, bcrypt cost 12.
-- New and password-reset accounts are forced through `/profile/password`
-  before they can use the app.
-- Separation of duties: a submitter can never approve/reject their own
-  submission (`lib/workflow/approvals.ts`); `ADMIN` administers users but is
-  excluded from every business capability so a single account can't both
-  create and approve a sale.
-- Approval steps are strictly sequential within a round (`seq`); an approver
-  cannot act out of order, twice, or on someone else's role. Rejecting a
-  round cancels the remaining pending steps atomically.
-- All identifiers passed in URLs are validated as UUIDs before hitting SQL;
-  every database call uses parameterised queries (tagged templates /
-  `$1,$2…`), never string interpolation.
-- Plot double-sale prevention: a unique index blocks two live sales from
-  claiming the same property + plot reference.
-- `X-Frame-Options`, `X-Content-Type-Options` and `Referrer-Policy` headers set
-  on every response (`next.config.mjs`).
-
-## Reports (role-scoped, `/reports`)
-
-- **Sales**: leads & daily target per marketer, sales value by executive, 12-month trend.
-- **Operations**: task backlog, overdue allocation documents, portal-open → docs-uploaded cycle time.
-- **Site Management**: pipeline by stage, upcoming allocations, allocation-notice ageing.
-- **Finance**: expenses by status, entry → receipt cycle time, total invoiced.
-- **HR**: staff activity, approval turnaround by role, oldest pending approvals (audit function).
-- **CEO / company-wide**: monthly sales, verified value, SLA breaches, allocations to date.
-- Every user also sees **My activity** — their own last-30-day audit trail.
+  a user or changing their role takes effect on the next request.
+- Login lockout after 5 failed attempts (15 minutes), bcrypt cost 12.
+- New and password-reset accounts are forced through `/profile/password`.
+- Separation of duties: a submitter cannot approve/reject their own submission.
+- Approval steps are sequential within a round and cannot be repeated or taken
+  out of order.
+- Identifiers passed in URLs are validated as UUIDs and database calls use
+  parameterised queries.
+- Plot double-sale prevention uses a unique database index.
+- Private uploaded files are now authorization-checked against the owning
+  workflow record before they can be streamed. A file UUID alone is not an
+  access credential.
+- Sales and expense exports now use the same row-level scope as the corresponding
+  application lists, preventing a user with a read capability from exporting
+  another user's restricted records.
+- `X-Frame-Options`, `X-Content-Type-Options` and `Referrer-Policy` headers are
+  set on responses (`next.config.mjs`).
 
 ## Database
 
-- `db/schema.sql` — full v3 schema, idempotent (`CREATE TABLE IF NOT EXISTS`,
-  safe to run repeatedly).
-- `db/upgrade-v2-to-v3.sql` — **only** if you already deployed the v2 schema
-  from the original zip and have live data in it; migrates roles, adds new
-  columns, re-maps legacy statuses. Run this once, then run `schema.sql` to
-  pick up anything it doesn't cover (new tables/indexes). On a fresh
-  database, skip this file and just run `schema.sql`.
+- `db/schema.sql` — full schema, idempotent.
+- `db/upgrade-v2-to-v3.sql` — use only when migrating a live v2 database.
 
-### First administrator
+## Creating the first administrator
 
-A ready-made admin account is seeded by `db/seed-admin.sql`:
-
-- Email: `admin@landblaze.com`
-- Password: `EXperts2020!`
-
-Run it in the Neon SQL editor straight after `schema.sql` (see the deployment
-steps below). It logs you in directly with no forced password change, precisely
-so the very first login after deploy is not blocked on anything — but the file
-carries a loud comment reminding you to change that password immediately after
-you've confirmed access, since it's now sitting in plain text in your repo.
-
-To create *additional* admins/users later — with a password only you type, never
-written to a file — use:
+There is intentionally **no default administrator password in this repository**.
+Generate a bcrypt hash locally and apply the resulting SQL to Neon:
 
 ```bash
-npm run hash -- 'YourStrongPassword1' someone@landblaze.com "Their Full Name"
+npm run hash -- 'YourStrongPassword1' admin@landblaze.com "Super Administrator"
 ```
 
-This prints an `INSERT` statement to run in the Neon SQL editor. That account
-*is* forced to change its password on first login (unlike the seeded one above).
+Do not paste the generated password or hash into GitHub, README files, or source
+code. Store production credentials only in your password manager / secret manager
+and Vercel environment variables.
 
 ## Environment variables
 
-See `.env.example`. `DATABASE_URL` and `AUTH_SECRET` (32+ random characters —
-`openssl rand -base64 48`) are required. `APP_URL`, `RESEND_API_KEY` and
-`MAIL_FROM` are optional; without them the app still works fully, it just
-skips sending e-mails (in-app notifications always work).
+See `.env.example`. `DATABASE_URL` and `AUTH_SECRET` (32+ random characters) are
+required. `APP_URL`, `RESEND_API_KEY` and `MAIL_FROM` are optional.
 
 ## Run locally
 
 ```bash
 npm install
-cp .env.example .env.local   # fill in DATABASE_URL and AUTH_SECRET
+cp .env.example .env.local
 npm run dev
 ```
 
 ## Tests
 
 ```bash
-npm test        # 30 tests: every row of the process sheet + the rights matrix,
-                 # run against a real embedded PostgreSQL (no network needed)
+npm test
 npm run typecheck
 ```
 
-## Deploy step by step
+## Deploy
 
-**1. Create the Neon database.**
-At [neon.tech](https://neon.tech), create a project (any region). Open the
-**SQL Editor** for it — you'll use this in steps 4–5. Copy the **connection
-string** from the dashboard (the pooled one, starting `postgresql://…`) — you'll
-need it in step 3.
-
-**2. Push this code to GitHub.**
-Unzip this project, `git init`, commit, and push it to a new GitHub repository.
-(If you're migrating from an earlier v2 deployment with live data, keep that
-repo/history — just replace its contents with this one and commit on top.)
-
-**3. Import the repo into Vercel and set environment variables.**
-At [vercel.com](https://vercel.com) → **Add New → Project** → import the GitHub
-repo. Before the first deploy (or right after, then redeploy), add these under
-**Settings → Environment Variables**:
-
-| Variable | Required | Value |
-|---|---|---|
-| `DATABASE_URL` | Yes | The Neon connection string from step 1 |
-| `AUTH_SECRET` | Yes | 32+ random characters — generate with `openssl rand -base64 48` |
-| `APP_URL` | No | Your Vercel URL (e.g. `https://landblaze.vercel.app`), used for links in e-mails |
-| `RESEND_API_KEY` | No | Only if you want e-mail notifications, from resend.com |
-| `MAIL_FROM` | No | e.g. `Landblaze <notifications@yourdomain.com>` — required if `RESEND_API_KEY` is set |
-
-**4. Create the database schema.**
-In the Neon SQL Editor, open `db/schema.sql` from this project, paste its full
-contents, and run it. (Migrating from a live v2 database instead? Run
-`db/upgrade-v2-to-v3.sql` first, then `schema.sql` — it's safe to run on top,
-it only adds what's missing.)
-
-**5. Seed the first administrator.**
-Still in the Neon SQL Editor, paste and run `db/seed-admin.sql`. This creates
-`admin@landblaze.com` / `EXperts2020!` with the ADMIN role.
-
-**6. Deploy.**
-Back in Vercel, trigger the deploy (it will have already tried once when you
-imported the repo — if environment variables weren't set yet at that point,
-just click **Redeploy** now that they are).
-
-**7. Log in and lock the account down.**
-Open your Vercel URL, sign in with `admin@landblaze.com` / `EXperts2020!`,
-then immediately click **Change password** at the bottom of the sidebar and
-set a real password. From there, use **Users & Roles** in the sidebar to create
-accounts for everyone else — each of those goes through the forced
-change-password-on-first-login flow, so this seeded account is the only one
-that ever needs this manual step.
+1. Create/configure the Neon database and run `db/schema.sql`.
+2. Configure `DATABASE_URL` and a newly generated `AUTH_SECRET` in Vercel.
+3. Generate the first admin password locally with `npm run hash` and run the
+   resulting SQL directly in Neon.
+4. Deploy from the protected `main` branch.
+5. Confirm login, role restrictions, exports and private-file access in a staging
+   deployment before promoting to production.
