@@ -1,0 +1,5 @@
+-- Finance documents are already stored in sale_documents and linked to uploaded_files.
+-- This migration is intentionally idempotent; it documents the supported finance
+-- document types used by the customer information view.
+-- No schema change is required because INVOICE, SALES_ORDER and SALES_RECEIPT
+-- are existing sale_documents.document_type values.
