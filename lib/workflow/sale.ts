@@ -534,12 +534,20 @@ const SALE_EDIT_FIELDS: Field[] = [
 ];
 
 export async function updateSale(actor: Actor, saleId: string, input: Record<string, unknown>) {
-  if (actor.role !== 'SUPER_ADMIN' && !SALE_APPROVERS.includes(actor.role)) throw new ForbiddenError('Only a Sales Manager or Operations Manager can edit a submitted sale');
+  const isPrivilegedEditor = actor.role === 'SUPER_ADMIN' || SALE_APPROVERS.includes(actor.role);
+  const isSalesExecutive = actor.role === 'SALES';
+  if (!isPrivilegedEditor && !isSalesExecutive) throw new ForbiddenError('Only the sale owner or an approver can edit a sale');
   const p = parseFields(SALE_EDIT_FIELDS, input);
   return run(actor, async ctx => {
     const sale = await one(ctx, `select * from sales where id=$1 for update`, [saleId]);
     if (!sale) throw new WorkflowError('Sale not found');
-    if (sale.status !== 'PENDING_SALES_APPROVAL') throw new WorkflowError('Only a sale awaiting Sales Manager approval can be edited');
+    const canEditDraft = sale.status === 'DRAFT' && isSalesExecutive && sale.created_by === actor.id;
+    const canEditSubmitted = sale.status === 'PENDING_SALES_APPROVAL' && isPrivilegedEditor;
+    if (!canEditDraft && !canEditSubmitted) {
+      throw new WorkflowError(canEditDraft || canEditSubmitted
+        ? 'This sale cannot be edited in its current stage'
+        : 'Sales executives can only edit their own saved drafts; submitted sales are locked');
+    }
     const taken = await one(ctx, `select id from sales where lower(property_name)=lower($1) and lower(plot_reference)=lower($2) and id<>$3 and status<>'CANCELLED' limit 1`, [p.property_name, p.plot_reference, saleId]);
     if (taken) throw new WorkflowError('This plot is already attached to another active sale');
     await ctx.tx.query(`update sales set property_name=$2, plot_reference=$3, estate_value=$4, payment_amount=$5, quoted_amount=$4, amount=$5, payment_plan=$6, description=$7, updated_at=now() where id=$1`, [saleId, p.property_name, p.plot_reference, p.estate_value, p.payment_amount, p.payment_plan, p.description]);
