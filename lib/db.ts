@@ -64,7 +64,32 @@ async function ensureApprovalSchema() {
         updated_at timestamptz NOT NULL DEFAULT now()
       );
       ALTER TABLE sale_documents ADD COLUMN IF NOT EXISTS uploaded_file_id uuid REFERENCES uploaded_files(id) ON DELETE SET NULL;
+      ALTER TABLE sale_documents ADD COLUMN IF NOT EXISTS document_url text;
       CREATE INDEX IF NOT EXISTS idx_sale_docs_file ON sale_documents(uploaded_file_id);
+      -- Compatibility migrations for production databases created before the
+      -- dedicated evidence-document tables were introduced. These tables are
+      -- queried during sale creation when payment evidence is uploaded.
+      CREATE TABLE IF NOT EXISTS expense_documents (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        expense_id uuid NOT NULL REFERENCES expenses(id) ON DELETE CASCADE,
+        document_type text NOT NULL DEFAULT 'SUPPORTING_DOCUMENT',
+        document_name text NOT NULL,
+        uploaded_file_id uuid REFERENCES uploaded_files(id) ON DELETE SET NULL,
+        uploaded_by uuid REFERENCES users(id),
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS idx_expense_docs_expense ON expense_documents(expense_id, created_at);
+      CREATE TABLE IF NOT EXISTS expense_payment_documents (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        expense_id uuid NOT NULL REFERENCES expenses(id) ON DELETE CASCADE,
+        document_type text NOT NULL DEFAULT 'PAYMENT_ADVICE',
+        document_name text NOT NULL,
+        uploaded_file_id uuid REFERENCES uploaded_files(id) ON DELETE SET NULL,
+        uploaded_by uuid REFERENCES users(id),
+        bank_reference text,
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS idx_expense_payment_docs_expense ON expense_payment_documents(expense_id, created_at);
       CREATE TABLE IF NOT EXISTS operations (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
         sale_id uuid NOT NULL,
