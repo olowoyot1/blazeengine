@@ -161,6 +161,38 @@ async function ensureApprovalSchema() {
         created_at timestamptz NOT NULL DEFAULT now(),
         completed_at timestamptz
       );
+      -- v4.2 compatibility fix: older production databases may have the
+      -- v4.0 refresh_sale_next_action() function with a RECORD variable that
+      -- does not select sale_reference, even though the notification branch
+      -- reads s.sale_reference. Rebuild that existing function definition in
+      -- place without dropping the trigger that depends on it.
+      DO $
+      DECLARE
+        v_def text;
+        v_fixed text;
+      BEGIN
+        SELECT pg_get_functiondef(p.oid)
+          INTO v_def
+          FROM pg_proc p
+          JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = current_schema()
+           AND p.proname = 'refresh_sale_next_action'
+           AND pg_get_function_identity_arguments(p.oid) = 'uuid'
+         LIMIT 1;
+
+        IF v_def IS NOT NULL
+           AND position('s.sale_reference' IN v_def) > 0
+           AND position('SELECT id, status, created_by, approved_at, allocation_date, sale_reference' IN v_def) = 0 THEN
+          v_fixed := replace(
+            v_def,
+            'SELECT id, status, created_by, approved_at, allocation_date',
+            'SELECT id, status, created_by, approved_at, allocation_date, sale_reference'
+          );
+          IF v_fixed <> v_def THEN
+            EXECUTE v_fixed;
+          END IF;
+        END IF;
+      END $;
     `).then(() => undefined).catch((error) => {
       schemaReady = null;
       throw error;
