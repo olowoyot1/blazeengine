@@ -338,6 +338,22 @@ export const SALE_ACTIONS: SaleAction[] = [
     },
   },
   {
+    key: 'upload_allocation_docs', label: 'Upload allocation documents',
+    help: 'Operations can submit the deed of assignment and survey plan together when both documents are available.',
+    roles: ['OPERATIONS', 'OPERATIONS_MANAGER'], from: ['SITE_NOTIFIED', 'OPS_DEED_UPLOADED', 'RETURNED'], to: 'OPS_DOCS_UPLOADED',
+    fields: [
+      { name: 'deed_of_assignment_url', label: 'Deed of assignment', type: 'file', required: true },
+      { name: 'survey_plan_url', label: 'Survey plan', type: 'file', required: true },
+    ],
+    async apply(ctx, s, i) {
+      await addDoc(ctx, s.id, 'DEED_OF_ASSIGNMENT', i.deed_of_assignment_url, 'Deed of assignment');
+      await addDoc(ctx, s.id, 'SURVEY_PLAN', i.survey_plan_url, 'Survey plan');
+      await closeTasks(ctx, s.id, 'ALLOCATION_DOCS');
+      await notifyRoles(ctx, ['SITE_MANAGER'], { title: 'Allocation documents uploaded', message: `${saleLabel(s)}. Perform the final audit.`, link: saleLink(s) });
+      return 'Deed of assignment and survey plan uploaded';
+    },
+  },
+  {
     key: 'upload_deed_of_assignment', label: 'Upload deed of assignment',
     help: 'Operations uploads the deed of assignment. Site Management separately uploads the survey plan.',
     roles: ['OPERATIONS', 'OPERATIONS_MANAGER'], from: ['SITE_NOTIFIED', 'OPS_DEED_UPLOADED', 'RETURNED'], to: 'OPS_DEED_UPLOADED',
@@ -502,10 +518,7 @@ export function availableSaleActions(sale: { status: string; created_by?: string
 }
 
 export async function performSaleAction(actor: Actor, saleId: string, key: string, input: Record<string, unknown>) {
-  const actionAliases: Record<string, string> = {
-    upload_allocation_docs: 'upload_deed_of_assignment',
-  };
-  const a = BY_KEY.get(actionAliases[key] ?? key);
+  const a = BY_KEY.get(key);
   if (!a) throw new WorkflowError('Unknown action');
   if (actor.role !== 'SUPER_ADMIN' && !a.roles.includes(actor.role)) throw new ForbiddenError('Your role is not permitted to do this');
   return run(actor, async ctx => {
