@@ -166,7 +166,7 @@ async function ensureApprovalSchema() {
       -- does not select sale_reference, even though the notification branch
       -- reads s.sale_reference. Rebuild that existing function definition in
       -- place without dropping the trigger that depends on it.
-      DO $
+      DO $$
       DECLARE
         v_def text;
         v_fixed text;
@@ -174,11 +174,7 @@ async function ensureApprovalSchema() {
         SELECT pg_get_functiondef(p.oid)
           INTO v_def
           FROM pg_proc p
-          JOIN pg_namespace n ON n.oid = p.pronamespace
-         WHERE n.nspname = current_schema()
-           AND p.proname = 'refresh_sale_next_action'
-           AND pg_get_function_identity_arguments(p.oid) = 'uuid'
-         LIMIT 1;
+         WHERE p.oid = to_regprocedure('refresh_sale_next_action(uuid)');
 
         IF v_def IS NOT NULL
            AND position('s.sale_reference' IN v_def) > 0
@@ -192,7 +188,7 @@ async function ensureApprovalSchema() {
             EXECUTE v_fixed;
           END IF;
         END IF;
-      END $;
+      END $$;
     `).then(() => undefined).catch((error) => {
       schemaReady = null;
       throw error;

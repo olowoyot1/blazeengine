@@ -12,11 +12,7 @@ BEGIN
   SELECT pg_get_functiondef(p.oid)
     INTO v_def
     FROM pg_proc p
-    JOIN pg_namespace n ON n.oid = p.pronamespace
-   WHERE n.nspname = current_schema()
-     AND p.proname = 'refresh_sale_next_action'
-     AND pg_get_function_identity_arguments(p.oid) = 'uuid'
-   LIMIT 1;
+   WHERE p.oid = to_regprocedure('refresh_sale_next_action(uuid)');
 
   IF v_def IS NOT NULL
      AND position('s.sale_reference' IN v_def) > 0
