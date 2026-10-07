@@ -377,7 +377,15 @@ export const SALE_ACTIONS: SaleAction[] = [
       const docs = await many(ctx, `select distinct document_type from sale_documents where sale_id=$1`, [s.id]);
       const have = new Set(docs.map(d => d.document_type));
       const missing = REQUIRED_DOCS.filter(d => !have.has(d));
-      if (!s.sales_invoice_no) missing.push('SALES_INVOICE');
+      const nature = documentNature(s);
+      const accountDocTypes = nature === 'OUTRIGHT'
+        ? ['INVOICE', 'SALES_RECEIPT']
+        : nature === 'INSTALLMENT'
+          ? ['SALES_ORDER', 'SALES_RECEIPT']
+          : ['SALES_RECEIPT'];
+      for (const type of accountDocTypes) {
+        if (!have.has(type)) missing.push(type);
+      }
       if (missing.length) throw new WorkflowError(`Cannot audit – missing: ${missing.map(m => m.replace(/_/g, ' ').toLowerCase()).join(', ')}`);
       await siteRecord(ctx, s.id, 'FINAL_SALE_AUDIT', { findings: i.audit_findings });
       const round = Number(s.chain_round) + 1;
