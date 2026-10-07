@@ -172,7 +172,9 @@ export const SALE_ACTIONS: SaleAction[] = [
   {
     key: 'approve_new_sale', label: 'Approve new sale',
     help: 'Sales Manager or Operations Manager reviews the submitted sale. Payment processing cannot start until this approval is completed.',
-    roles: SALE_APPROVERS, from: ['PENDING_SALES_APPROVAL'], to: 'DRAFT',
+    // Sales organizers can approve submitted sales, but the self-approval guard in
+    // performSaleAction prevents them from approving a sale they created.
+    roles: ['SALES', ...SALE_APPROVERS], from: ['PENDING_SALES_APPROVAL'], to: 'DRAFT',
     fields: [{ name: 'note', label: 'Approval note (optional)', type: 'textarea' }],
     async apply(ctx, s, i) {
       await ctx.tx.query(`update sales set gate_approved_by=$2 where id=$1`, [s.id, ctx.actor.id]);
