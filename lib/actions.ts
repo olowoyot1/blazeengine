@@ -20,8 +20,22 @@ type Result = { ok: true; id?: string } | { error: string };
 
 function toErr(e: unknown): Result {
   if (e instanceof WorkflowError || e instanceof ForbiddenError) return { error: e.message };
-  console.error(e);
-  return { error: 'Something went wrong. Please try again.' };
+  const err = e as { code?: string; constraint?: string; detail?: string; message?: string };
+  console.error('[Landblaze action error]', e);
+  // Convert common PostgreSQL failures into actionable messages. Never expose
+  // connection strings, SQL text, or stack traces to the browser.
+  if (err?.code === '23505') {
+    if (String(err.constraint ?? '').includes('uq_sales_live_plot') || String(err.detail ?? '').toLowerCase().includes('property_name, lower(plot_reference)')) {
+      return { error: 'This estate/plot already has an active sale. Check the plot reference or open the existing sale to record a top-up.' };
+    }
+    return { error: 'This record conflicts with an existing record. Check the values and try again.' };
+  }
+  if (err?.code === '23503') return { error: 'A related record is missing or no longer available. Refresh the page and try again.' };
+  if (err?.code === '42703') return { error: 'The database is missing a required field for this operation. The production database migration needs to complete before saving.' };
+  if (err?.code === '42P01') return { error: 'A required database table is missing. The production database migration needs to complete before saving.' };
+  if (err?.code === '22P02') return { error: 'One of the submitted values has an invalid format. Check the client, amount, plot and payment details.' };
+  if (err?.message) return { error: 'The sale could not be saved. Please refresh and try again.' };
+  return { error: 'The sale could not be saved. Please try again.' };
 }
 
 export async function actSale(saleId: string, key: string, input: Record<string, unknown>): Promise<Result> {
