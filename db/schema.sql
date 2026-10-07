@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS leads(
 );
 
 CREATE SEQUENCE IF NOT EXISTS sale_reference_seq;
+CREATE SEQUENCE IF NOT EXISTS invoice_number_seq;
 CREATE SEQUENCE IF NOT EXISTS transaction_reference_seq;
 
 CREATE TABLE IF NOT EXISTS sales(
@@ -120,6 +121,11 @@ CREATE TABLE IF NOT EXISTS sales(
 
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS sale_reference text;
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS transaction_type text NOT NULL DEFAULT 'INITIAL_DEPOSIT';
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS beneficiary_name text;
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS beneficiary_phone text;
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS beneficiary_email text;
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS beneficiary_address text;
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS beneficiary_relationship text;
 UPDATE sales SET sale_reference = 'SALE-' || to_char(created_at, 'YYYYMM') || '-' || upper(substr(replace(id::text, '-', ''), 1, 8)) WHERE sale_reference IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS sales_sale_reference_unique ON sales(sale_reference);
 
