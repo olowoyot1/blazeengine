@@ -49,7 +49,7 @@ async function main() {
   const unread = async (userId: string) => Number(((await pg.query(`select count(*) n from notifications where user_id=$1`, [userId])).rows[0] as any).n);
   const pendingFor = async (id: string, role: string) => (await pg.query(`select * from approvals where entity_id=$1 and approver_role=$2 and status='PENDING' order by created_at`, [id, role])).rows as any[];
   const act = (a: wf.Actor, id: string, key: string, input: any = {}) => wf.performSaleAction(a, id, key, input);
-  const createApprovedSale = async (a: wf.Actor, input: any) => { const id = await wf.createSale(a, input); await act(U.SALES_MANAGER, id, 'approve_new_sale', {}); return id; };
+  const createApprovedSale = async (a: wf.Actor, input: any) => { const id = await wf.createSale(a, { beneficiary_name: 'Test Beneficiary', beneficiary_phone: '07000000000', ...input }); await act(U.SALES_MANAGER, id, 'approve_new_sale', {}); return id; };
   // File fields now only accept our own /api/files/<uuid> paths (produced by an
   // actual upload), so tests fabricate a stable, distinct fake path per name —
   // preserving the "same link reused" duplicate-evidence test below.
@@ -87,7 +87,7 @@ async function main() {
   console.log('\nSale lifecycle (sheet rows 1–12)');
   let sale = '';
   await t('marketer cannot create a sale; sales exec can; plot double-sale blocked', async () => {
-    const f = { client_id: clientId, property_name: 'Blaze Estate', plot_reference: 'A-12', amount: '5000000' };
+    const f = { client_id: clientId, property_name: 'Blaze Estate', plot_reference: 'A-12', amount: '5000000', beneficiary_name: 'Ada Obi', beneficiary_phone: '0803' };
     await denied(wf.createSale(U.MARKETER, f), /Only the sales team/);
     sale = await wf.createSale(U.SALES, f);
     await denied(wf.createSale(U.SALES_MANAGER, { ...f, plot_reference: 'a-12' }), /already attached/);
@@ -252,9 +252,9 @@ async function main() {
     assert.ok(await unread(U.FINANCE_OPERATIONS.id) >= 1);
   });
   await t('row16: finance ops disburses after CEO approval and uploads payment evidence', async () => {
-    await denied(wf.performExpenseAction(U.SITE_MANAGER, ex, 'disburse_and_upload_proof', { bank_proof_url: url('b'), bank_reference: 'B1', bank_alert_ref: 'A1' }), /not permitted/);
+    await denied(wf.performExpenseAction(U.SITE_MANAGER, ex, 'disburse_and_upload_proof', { payment_advice_url: url('b'), bank_reference: 'B1', bank_alert_ref: 'A1' }), /not permitted/);
     const before = await unread(U.SITE_MANAGER.id);
-    await wf.performExpenseAction(U.FINANCE_OPERATIONS, ex, 'disburse_and_upload_proof', { bank_proof_url: url('b'), bank_reference: 'B1', bank_alert_ref: 'A1' });
+    await wf.performExpenseAction(U.FINANCE_OPERATIONS, ex, 'disburse_and_upload_proof', { payment_advice_url: url('b'), bank_reference: 'B1', bank_alert_ref: 'A1' });
     assert.equal(await estatus(ex), 'PAID');
     assert.equal(await unread(U.SITE_MANAGER.id), before + 1);
   });

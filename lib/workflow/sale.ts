@@ -593,13 +593,16 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
       await assertOwnedUpload(ctx, p.payment_proof_url, 'Payment evidence', 'sales_payment_evidence');
       await assertFreshEvidence(ctx, p.payment_proof_url, 'payment evidence');
     }
-    const paymentStatus = p.payment_proof_url ? 'PROOF_SUBMITTED' : 'UNPAID';
-    const s = (await one(ctx,
+  const beneficiaryName = p.beneficiary_name ?? client.name;
+  const beneficiaryPhone = p.beneficiary_phone ?? client.phone;
+  if (!beneficiaryName || !beneficiaryPhone) throw new WorkflowError('Beneficiary full name and phone are required');
+  const paymentStatus = p.payment_proof_url ? 'PROOF_SUBMITTED' : 'UNPAID';
+  const s = (await one(ctx,
 `insert into sales(sale_reference,transaction_type,client_id,lead_id,client_name,client_email,property_name,plot_reference,amount,estate_value,payment_amount,quoted_amount,payment_plan,description,status,payment_status,payment_reference,created_by,
     beneficiary_name,beneficiary_phone,beneficiary_email,beneficiary_address,beneficiary_relationship)
   values('SALE-' || to_char(now(), 'YYYYMM') || '-' || lpad(nextval('sale_reference_seq')::text, 6, '0'), $1, $2,(select id from leads where client_id=$2 limit 1),$3,$4,$5,$6,$7,$8,$9,$7,$10,$11,'DRAFT',$12,$13,$14,$15,$16,$17,$18,$19) returning id, sale_reference`,
   [p.transaction_type, client.id, client.name, client.email, p.property_name, p.plot_reference, p.estate_value, p.estate_value, p.payment_amount, p.payment_plan, p.description, paymentStatus, p.payment_reference ?? null, actor.id,
-    p.beneficiary_name, p.beneficiary_phone, p.beneficiary_email ?? null, p.beneficiary_address ?? null, p.beneficiary_relationship ?? null]))!;
+    beneficiaryName, beneficiaryPhone, p.beneficiary_email ?? null, p.beneficiary_address ?? null, p.beneficiary_relationship ?? 'Self']))!;
     if (p.payment_proof_url) {
       const m = String(p.payment_proof_url).match(/^\/api\/files\/([0-9a-f-]{36})$/i)!;
       await ctx.tx.query(`insert into sale_documents(sale_id,document_type,document_name,document_url,uploaded_file_id,uploaded_by) values($1,'PAYMENT_PROOF','Payment evidence',$2,$3::uuid,$4)`, [s.id, p.payment_proof_url, m[1], actor.id]);
