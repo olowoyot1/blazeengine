@@ -34,7 +34,7 @@ DECLARE
   v_old_user uuid;
   v_owner uuid;
 BEGIN
-  SELECT id, status, created_by, approved_at, allocation_date
+  SELECT id, status, created_by, approved_at, allocation_date, sale_reference
     INTO s FROM sales WHERE id=p_sale_id;
   IF NOT FOUND THEN RETURN; END IF;
 
