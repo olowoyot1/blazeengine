@@ -572,13 +572,23 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
     ...BENEFICIARY_FIELDS,
   ], normalizedInput);
   if (p.payment_proof_url && !p.payment_reference) throw new WorkflowError('Payment reference is required when payment evidence is uploaded');
+  const estateValue = Number(p.estate_value);
+  const paymentAmount = Number(p.payment_amount);
+  if (!Number.isFinite(estateValue) || estateValue <= 0) throw new WorkflowError('Estate value must be a valid amount greater than ₦0.');
+  if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) throw new WorkflowError('Payment amount must be a valid amount greater than ₦0.');
+  if (p.transaction_type === 'INITIAL_DEPOSIT' && paymentAmount > estateValue) throw new WorkflowError('Payment amount cannot be greater than the estate value. Check the amount entered.');
   return run(actor, async ctx => {
     const client = await one(ctx, `select * from clients where id=$1`, [p.client_id]);
     if (!client) throw new WorkflowError('Client not found');
     const taken = await one(ctx,
-      `select id from sales where lower(property_name)=lower($1) and lower(plot_reference)=lower($2) and status<>'CANCELLED' limit 1`,
+      `select id, sale_reference, transaction_type from sales where lower(property_name)=lower($1) and lower(plot_reference)=lower($2) and status<>'CANCELLED' limit 1`,
       [p.property_name, p.plot_reference]);
-    if (taken) throw new WorkflowError('This plot is already attached to another active sale (double-sale prevention)');
+    if (taken) {
+      if (p.transaction_type === 'TOP_UP') {
+        throw new WorkflowError('This plot already has an active sale. A TOP-UP must be recorded against the existing sale, not created as a new sale. Open the existing sale and record the top-up there.');
+      }
+      throw new WorkflowError('This plot is already attached to another active sale (double-sale prevention). Check the estate and plot reference entered.');
+    }
     if (p.payment_proof_url) {
       await assertOwnedUpload(ctx, p.payment_proof_url, 'Payment evidence', 'sales_payment_evidence');
       await assertFreshEvidence(ctx, p.payment_proof_url, 'payment evidence');
