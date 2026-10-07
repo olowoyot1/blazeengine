@@ -25,6 +25,35 @@ async function ensureApprovalSchema() {
     schemaReady = pool.query(`
       ALTER TABLE approvals ADD COLUMN IF NOT EXISTS approver_user_id uuid;
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS transaction_type text NOT NULL DEFAULT 'INITIAL_DEPOSIT';
+      -- Keep older production databases compatible with the current sale-create workflow.
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS client_id uuid REFERENCES clients(id);
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS lead_id uuid REFERENCES leads(id);
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS client_name text;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS client_email text;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS property_name text;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS plot_reference text;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS amount numeric(14,2) NOT NULL DEFAULT 0;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS estate_value numeric(14,2);
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS payment_amount numeric(14,2);
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS quoted_amount numeric(14,2);
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS payment_plan text;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS description text;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'PENDING_SALES_APPROVAL';
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS payment_status text NOT NULL DEFAULT 'UNPAID';
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS payment_reference text;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS sales_order_no text;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS sales_receipt_no text;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS sales_invoice_no text;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS ops_due_date date;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS chain_round int NOT NULL DEFAULT 0;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS gate_approved_by uuid;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS invoice_variance_reason text;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS returned_reason text;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS allocated_at timestamptz;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS created_by uuid REFERENCES users(id);
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS transaction_type text NOT NULL DEFAULT 'INITIAL_DEPOSIT';
       ALTER TABLE expenses ADD COLUMN IF NOT EXISTS transaction_reference text;
       ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS transaction_reference text;
       CREATE SEQUENCE IF NOT EXISTS sale_reference_seq;
