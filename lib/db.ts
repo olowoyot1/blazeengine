@@ -63,6 +63,8 @@ async function ensureApprovalSchema() {
         created_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now()
       );
+      ALTER TABLE sale_documents ADD COLUMN IF NOT EXISTS uploaded_file_id uuid REFERENCES uploaded_files(id) ON DELETE SET NULL;
+      CREATE INDEX IF NOT EXISTS idx_sale_docs_file ON sale_documents(uploaded_file_id);
       CREATE TABLE IF NOT EXISTS operations (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
         sale_id uuid NOT NULL,
