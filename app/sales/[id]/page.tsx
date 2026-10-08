@@ -8,7 +8,6 @@ import { naira, fmtDateTime, human } from '@/lib/format';
 import { availableSaleActions, canChangeBeneficiary } from '@/lib/workflow/sale';
 import { ChangeBeneficiaryForm } from './ChangeBeneficiaryForm';
 import { SALE_STATUS_LABEL } from '@/lib/constants';
-import { can } from '@/lib/rbac';
 import { SaleActionPanel } from './SaleActionPanel';
 import { EditSaleForm } from './EditSaleForm';
 import { DeleteTransaction } from '@/components/DeleteTransaction';
