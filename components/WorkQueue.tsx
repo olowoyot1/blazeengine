@@ -16,7 +16,7 @@ export function WorkQueue({ title, sales, emptyLabel }: { title: string; sales: 
               <td><b>{transactionDocumentLabel(r)}</b><div className="muted small">{String(r.transaction_type ?? '').toUpperCase() === 'TOP_UP' ? 'Top-up' : String(r.payment_plan ?? '').toUpperCase() === 'OUTRIGHT' ? 'Outright sale' : 'Installment'}</div></td>
               <td>{naira(r.amount ?? r.payment_amount ?? 0)}</td>
               <td><Badge status={r.status || 'PENDING'} /></td>
-              <td><Link className="btn light" href={`/sales/${r.id}`}>Open</Link></td>
+              <td><a className="btn light" href={`/sales/${encodeURIComponent(String(r.id))}`} aria-label={`Open sale ${r.sale_reference || r.id}`}>Open</a></td>
             </tr>
           ))}</tbody>
         </table></div>
