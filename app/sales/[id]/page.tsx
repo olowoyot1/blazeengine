@@ -8,6 +8,7 @@ import { naira, fmtDateTime, human } from '@/lib/format';
 import { availableSaleActions, canChangeBeneficiary } from '@/lib/workflow/sale';
 import { ChangeBeneficiaryForm } from './ChangeBeneficiaryForm';
 import { SALE_STATUS_LABEL } from '@/lib/constants';
+import { can } from '@/lib/rbac';
 import { SaleActionPanel } from './SaleActionPanel';
 import { EditSaleForm } from './EditSaleForm';
 import { DeleteTransaction } from '@/components/DeleteTransaction';
@@ -16,8 +17,12 @@ const MAIN_LINE = ['PENDING_SALES_APPROVAL', 'DRAFT', 'PAYMENT_PROOF_SUBMITTED',
 
 export default async function SaleDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const s = await requireCap('sale.read', 'sale.read_all');
-  const [data, approvers] = await Promise.all([getSale(s, id), listActiveApprovers()]);
+  const s = await requireCap('sale.read', 'sale.read_all', 'ops.workspace');
+  const results = await Promise.allSettled([getSale(s, id), listActiveApprovers()]);
+  const data = results[0].status === 'fulfilled' ? results[0].value : null;
+  const approvers = results[1].status === 'fulfilled' ? results[1].value : [];
+  if (results[0].status === 'rejected') console.error('[sale-detail] failed to load sale:', results[0].reason);
+  if (results[1].status === 'rejected') console.error('[sale-detail] failed to load approvers:', results[1].reason);
   if (!data) notFound();
   const { sale, docs, events, approvals, records, tasks, actionableApproval, beneficiaryChanges } = data;
   const approverOptions = (role: string) => approvers.filter((u: any) => u.role === role).map((u: any) => `${u.id} — ${u.name}`);
