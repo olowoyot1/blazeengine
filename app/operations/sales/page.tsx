@@ -49,7 +49,7 @@ export default async function OperationsSalesInfo() {
                   <td>{naira(r.amount ?? r.payment_amount ?? 0)}</td>
                   <td><Badge status={r.status || 'PENDING'} /></td>
                   <td><Badge status={r.payment_status || 'PENDING'} label={String(r.payment_status || 'PENDING').replace(/_/g, ' ')} /></td>
-                  <td><Link className="btn light" href={`/sales/${r.id}`}>Open</Link></td>
+                  <td><Link className="btn light" href={`/operations/sales/${r.id}`}>Open</Link></td>
                 </tr>
               ))}
             </tbody>
