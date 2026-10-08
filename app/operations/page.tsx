@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import Shell from '@/components/Shell';
 import { requireCap } from '@/lib/guard';
 import { listSales, opsTasks } from '@/lib/queries';
