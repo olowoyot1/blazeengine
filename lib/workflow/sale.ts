@@ -145,6 +145,30 @@ async function closeTasks(ctx: Ctx, saleId: string, type: string) {
 const daysFrom = (d: Date | string, n: number) => new Date(new Date(d).getTime() + n * 86400000);
 const isoDay = (d: Date) => d.toISOString().slice(0, 10);
 
+async function assertAllocationPaid(ctx: Ctx, s: Row) {
+  const currentRequired = Number(s.estate_value ?? s.quoted_amount ?? 0);
+  const currentPaid = Number(s.payment_amount ?? s.amount ?? 0);
+  if (String(s.payment_plan ?? '').toUpperCase() === 'OUTRIGHT' && currentRequired > 0 && currentPaid + 0.005 < currentRequired) {
+    throw new WorkflowError(`Allocation is blocked until the outright purchase is fully paid. Outstanding balance: ${money(currentRequired - currentPaid)}`);
+  }
+  if (!s.client_id) {
+    if (currentRequired > 0 && currentPaid + 0.005 < currentRequired) {
+      throw new WorkflowError(`Allocation is blocked until full payment is made. Outstanding balance: ${money(currentRequired - currentPaid)}`);
+    }
+    return;
+  }
+  const balance = await one(ctx, `
+    select greatest(0, coalesce(sum(case when upper(coalesce(transaction_type, '')) = 'TOP_UP'
+      then coalesce(estate_value, payment_amount, amount, 0)
+      else coalesce(estate_value, quoted_amount, amount, 0) end), 0)
+      - sum(case when payment_status = 'VERIFIED' then coalesce(payment_amount, amount, 0) else 0 end)) as outstanding
+    from sales where client_id=$1 and status <> 'CANCELLED'`, [s.client_id]);
+  const outstanding = Number(balance?.outstanding ?? 0);
+  if (outstanding > 0.005) {
+    throw new WorkflowError(`Allocation is blocked until the customer's balance is fully paid. Outstanding balance: ${money(outstanding)}`);
+  }
+}
+
 export const SALE_CHAIN: Step[] = [
   { step: 'Sales Manager approval', role: 'SALES_MANAGER', seq: 1 },
   { step: 'Operations Manager approval', role: 'OPERATIONS_MANAGER', seq: 2 },
@@ -434,6 +458,7 @@ export const SALE_ACTIONS: SaleAction[] = [
       { name: 'logistics_notes', label: 'Logistics & feeding arrangements', type: 'textarea', required: true },
     ],
     async apply(ctx, s, i) {
+      await assertAllocationPaid(ctx, s);
       await addDoc(ctx, s.id, 'SOFT_COPY', i.soft_copy_url, 'Soft copy sent to client');
       await siteRecord(ctx, s.id, 'SOFT_COPY_SENT', { url: i.soft_copy_url });
       await siteRecord(ctx, s.id, 'SITE_SURVEY', { plan: i.site_survey_plan });
@@ -450,6 +475,7 @@ export const SALE_ACTIONS: SaleAction[] = [
     roles: ['SITE_MANAGER'], from: ['PRE_ALLOCATION'], to: 'ALLOCATION_SCHEDULED',
     fields: [{ name: 'allocation_date', label: 'Allocation date', type: 'date', required: true }],
     async apply(ctx, s, i) {
+      await assertAllocationPaid(ctx, s);
       const today = isoDay(new Date());
       if (String(i.allocation_date) < today) throw new WorkflowError('Allocation date cannot be in the past');
       await ctx.tx.query(`update sales set allocation_date=$2 where id=$1`, [s.id, i.allocation_date]);
@@ -469,6 +495,7 @@ export const SALE_ACTIONS: SaleAction[] = [
     roles: ['SITE_MANAGER'], from: ['ALLOCATION_SCHEDULED'], to: 'ALLOCATED',
     fields: [{ name: 'completion_note', label: 'Completion note', type: 'textarea' }],
     async apply(ctx, s, i) {
+      await assertAllocationPaid(ctx, s);
       await ctx.tx.query(`update sales set allocated_at=now() where id=$1`, [s.id]);
       await siteRecord(ctx, s.id, 'ALLOCATION_COMPLETED', { note: i.completion_note });
       const n = { title: 'Plot allocated', message: saleLabel(s), link: saleLink(s) };
