@@ -27,7 +27,7 @@ export async function getSale(u: U, id: string) {
     where s.id=${id}::uuid and (${sc.all}::boolean or (${sc.own}::boolean and s.created_by=${sc.uid}::uuid) or s.status = any(${sc.statuses}::text[]))`;
   const sale = rows[0];
   if (!sale) return null;
-  const [docs, events, approvals, records, tasks, actionableApproval] = await Promise.all([
+  const results = await Promise.allSettled([
     sql`select d.*, u.name uploader from sale_documents d left join users u on u.id=d.uploaded_by where d.sale_id=${id}::uuid order by d.created_at`,
     sql`select e.*, u.name actor, u.role actor_role from workflow_events e left join users u on u.id=e.actor_id where e.entity_type='SALE' and e.entity_id=${id}::uuid order by e.created_at desc`,
     sql`select a.*, u.name acted_by_name from approvals a left join users u on u.id=a.acted_by where a.entity_type='SALE' and a.entity_id=${id}::uuid order by a.round_no, a.seq, a.created_at`,
@@ -35,6 +35,12 @@ export async function getSale(u: U, id: string) {
     sql`select * from operations where sale_id=${id}::uuid order by created_at`,
     actionableApprovalForEntity(u, 'SALE', id),
   ]);
+  const rowsOrEmpty = (result: PromiseSettledResult<unknown>) => result.status === 'fulfilled' && Array.isArray(result.value) ? result.value as Row[] : [];
+  const [docs, events, approvals, records, tasks] = results.slice(0, 5).map(rowsOrEmpty);
+  const actionableApproval = results[5].status === 'fulfilled' ? results[5].value : null;
+  for (const result of results) {
+    if (result.status === 'rejected') console.error('[queries:getSale] related data unavailable:', result.reason);
+  }
   let beneficiaryChanges: Row[] = [];
   try {
     beneficiaryChanges = await sql`select b.*, u.name changed_by_name from sale_beneficiary_changes b left join users u on u.id=b.changed_by where b.sale_id=${id}::uuid order by b.created_at desc`;
@@ -88,13 +94,19 @@ export async function getExpense(u: U, id: string) {
     left join sales s on s.id=e.sale_id left join users b on b.id=e.submitted_by
     where e.id=${id}::uuid and (${sc.all}::boolean or e.submitted_by=${sc.uid}::uuid)`;
   if (!rows[0]) return null;
-  const [events, approvals, documents, paymentDocuments, actionableApproval] = await Promise.all([
+  const results = await Promise.allSettled([
     sql`select e.*, u.name actor, u.role actor_role from workflow_events e left join users u on u.id=e.actor_id where e.entity_type='EXPENSE' and e.entity_id=${id}::uuid order by e.created_at desc`,
     sql`select a.*, u.name acted_by_name from approvals a left join users u on u.id=a.acted_by where a.entity_type='EXPENSE' and a.entity_id=${id}::uuid order by a.round_no, a.seq, a.created_at`,
     sql`select d.*, u.name uploader from expense_documents d left join users u on u.id=d.uploaded_by where d.expense_id=${id}::uuid order by d.created_at desc`,
     sql`select d.*, u.name uploader from expense_payment_documents d left join users u on u.id=d.uploaded_by where d.expense_id=${id}::uuid order by d.created_at desc`,
     actionableApprovalForEntity(u, 'EXPENSE', id),
   ]);
+  const rowsOrEmpty = (result: PromiseSettledResult<unknown>) => result.status === 'fulfilled' && Array.isArray(result.value) ? result.value as Row[] : [];
+  const [events, approvals, documents, paymentDocuments] = results.slice(0, 4).map(rowsOrEmpty);
+  const actionableApproval = results[4].status === 'fulfilled' ? results[4].value : null;
+  for (const result of results) {
+    if (result.status === 'rejected') console.error('[queries:getExpense] related data unavailable:', result.reason);
+  }
   return { expense: rows[0], events, approvals, documents, paymentDocuments, actionableApproval };
 }
 
@@ -197,8 +209,13 @@ export async function myQueue(u: U): Promise<QueueItem[]> {
 
 // ---------------------------------------------------------------- Department workspaces
 export async function opsTasks() {
-  return sql`select o.*, s.client_name, s.property_name, s.plot_reference, s.status sale_status
-    from operations o join sales s on s.id=o.sale_id where o.status='PENDING' order by o.due_date nulls first, o.created_at limit 200`;
+  try {
+    return await sql`select o.*, s.client_name, s.property_name, s.plot_reference, s.status sale_status
+      from operations o join sales s on s.id=o.sale_id where o.status='PENDING' order by o.due_date nulls first, o.created_at limit 200`;
+  } catch (error) {
+    console.error('[queries:opsTasks] failed to load operations tasks:', error);
+    return [];
+  }
 }
 export async function siteRecords(limit = 100) {
   return sql`select r.*, s.client_name, s.plot_reference, u.name creator from site_records r join sales s on s.id=r.sale_id left join users u on u.id=r.created_by order by r.created_at desc limit ${limit}`;

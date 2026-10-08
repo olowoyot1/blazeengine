@@ -7,11 +7,17 @@ import { fmtDate, daysUntil } from '@/lib/format';
 
 export default async function Operations() {
   const s = await requireCap('ops.workspace');
-  const [approved, docsOpen, tasks] = await Promise.all([
+  const results = await Promise.allSettled([
     listSales(s, { status: 'SALES_APPROVED' }),
     listSales(s, { statuses: ['SITE_NOTIFIED', 'OPS_DEED_UPLOADED', 'RETURNED'] }),
     opsTasks(),
   ]);
+  const approved = results[0].status === 'fulfilled' ? results[0].value : [];
+  const docsOpen = results[1].status === 'fulfilled' ? results[1].value : [];
+  const tasks = results[2].status === 'fulfilled' ? results[2].value : [];
+  for (const result of results) {
+    if (result.status === 'rejected') console.error('[operations] failed to load workspace data:', result.reason);
+  }
   return (
     <Shell s={s} title="Operations" kicker="Approved sale → sale documents → allocation handoff (30 days)">
       <div className="grid2">
