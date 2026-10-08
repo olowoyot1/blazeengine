@@ -13,7 +13,17 @@ export async function listSales(u: U, opts: { status?: string; statuses?: string
   const sc = saleScope(u);
   const st = opts.statuses ?? (opts.status ? [opts.status] : null);
   return sql`
-    select s.*, c.name creator from sales s left join users c on c.id=s.created_by
+    select s.*, c.name creator,
+      greatest(0, coalesce(s.estate_value, s.quoted_amount, s.amount, 0) - coalesce((
+        select sum(coalesce(p.payment_amount, p.amount, 0))
+        from sales p
+        where p.client_id=s.client_id
+          and p.status <> 'CANCELLED'
+          and p.payment_status='VERIFIED'
+          and lower(coalesce(p.property_name, '')) = lower(coalesce(s.property_name, ''))
+          and lower(coalesce(p.plot_reference, '')) = lower(coalesce(s.plot_reference, ''))
+      ), 0)) as outstanding_balance
+    from sales s left join users c on c.id=s.created_by
     where (${sc.all}::boolean or (${sc.own}::boolean and s.created_by=${sc.uid}::uuid) or s.status = any(${sc.statuses}::text[]))
       and (${st}::text[] is null or s.status = any(${st}::text[]))
     order by s.updated_at desc limit ${opts.limit ?? 200}`;
