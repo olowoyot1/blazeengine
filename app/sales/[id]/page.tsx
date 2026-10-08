@@ -1,5 +1,5 @@
 import Shell from '@/components/Shell';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { requireCap } from '@/lib/guard';
 import { getSale, listActiveApprovers } from '@/lib/queries';
 import { Badge } from '@/components/Badge';
@@ -17,6 +17,7 @@ const MAIN_LINE = ['PENDING_SALES_APPROVAL', 'DRAFT', 'PAYMENT_PROOF_SUBMITTED',
 export default async function SaleDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const s = await requireCap('sale.read', 'sale.read_all', 'ops.workspace');
+  if (s.role === 'OPERATIONS' || s.role === 'OPERATIONS_MANAGER') redirect(`/operations/sales/${encodeURIComponent(id)}`);
   const results = await Promise.allSettled([getSale(s, id), listActiveApprovers()]);
   const data = results[0].status === 'fulfilled' ? results[0].value : null;
   const approvers = results[1].status === 'fulfilled' ? results[1].value : [];
