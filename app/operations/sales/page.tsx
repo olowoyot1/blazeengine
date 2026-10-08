@@ -33,6 +33,7 @@ export default async function OperationsSalesInfo() {
                 <th>Plot</th>
                 <th>Transaction</th>
                 <th>Amount</th>
+                <th>Balance to pay</th>
                 <th>Status</th>
                 <th>Payment</th>
                 <th></th>
@@ -47,6 +48,7 @@ export default async function OperationsSalesInfo() {
                   <td>{r.plot_reference || '—'}</td>
                   <td>{String(r.transaction_type || 'INITIAL_DEPOSIT').replace(/_/g, ' ')}</td>
                   <td>{naira(r.amount ?? r.payment_amount ?? 0)}</td>
+                  <td>{naira(r.outstanding_balance ?? 0)}</td>
                   <td><Badge status={r.status || 'PENDING'} /></td>
                   <td><Badge status={r.payment_status || 'PENDING'} label={String(r.payment_status || 'PENDING').replace(/_/g, ' ')} /></td>
                   <td><Link className="btn light" href={`/operations/sales/${r.id}`}>Open</Link></td>
