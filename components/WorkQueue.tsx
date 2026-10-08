@@ -1,4 +1,3 @@
-import Link from 'next/link';
 import { Badge } from './Badge';
 import { naira } from '@/lib/format';
 import { transactionDocumentLabel } from './TransactionDocumentLabel';
