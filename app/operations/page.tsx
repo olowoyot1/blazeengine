@@ -19,7 +19,7 @@ export default async function Operations() {
     if (result.status === 'rejected') console.error('[operations] failed to load workspace data:', result.reason);
   }
   return (
-    <Shell s={s} title="Operations" kicker="Approved sale → sale documents → allocation handoff (30 days)">
+    <Shell s={s} title="Operations" kicker="Approved sale → sale documents → allocation handoff (30 days)" actions={<Link className="btn" href="/operations/sales">Sales Information</Link>}>
       <div className="grid2">
         <WorkQueue title="Approved sales → create sale documents" sales={approved} emptyLabel="Nothing waiting." />
         <WorkQueue title="Allocation documents → site review" sales={docsOpen} emptyLabel="Nothing waiting." />
