@@ -5,7 +5,7 @@ import { getSale, listActiveApprovers } from '@/lib/queries';
 import { sql } from '@/lib/db';
 import { Badge } from '@/components/Badge';
 import { ApprovalDecisionPanel } from '@/components/ApprovalDecisionPanel';
-import { naira, fmtDateTime, human } from '@/lib/format';
+import { naira, fmtDate, fmtDateTime, human } from '@/lib/format';
 import { availableSaleActions, canChangeBeneficiary } from '@/lib/workflow/sale';
 import { ChangeBeneficiaryForm } from './ChangeBeneficiaryForm';
 import { SALE_STATUS_LABEL } from '@/lib/constants';
@@ -79,8 +79,8 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
             <tr><td className="muted">Estate value</td><td>{naira(sale.estate_value ?? sale.quoted_amount ?? sale.amount)}</td></tr>
             <tr><td className="muted">Transaction</td><td>{sale.transaction_type === 'TOP_UP' ? 'Top-up' : 'Initial deposit'} · {naira(sale.payment_amount ?? sale.amount)} · {sale.payment_plan === 'INSTALLMENT' ? 'Installment' : sale.payment_plan === 'OUTRIGHT' ? 'Outright' : '—'} · <Badge status={sale.payment_status} label={(sale.payment_status || 'PENDING').replace(/_/g, ' ')} /> {sale.payment_reference || ''}</td></tr>
             <tr><td className="muted">Invoice / SO / SR / SI</td><td>{[sale.invoice_number, sale.sales_order_no, sale.sales_receipt_no, sale.sales_invoice_no].filter(Boolean).join(' · ') || '—'}</td></tr>
-            <tr><td className="muted">Ops documents due</td><td>{sale.ops_due_date || '—'}</td></tr>
-            <tr><td className="muted">Allocation date</td><td>{sale.allocation_date || 'Not scheduled'}</td></tr>
+            <tr><td className="muted">Ops documents due</td><td>{sale.ops_due_date ? fmtDate(sale.ops_due_date) : '—'}</td></tr>
+            <tr><td className="muted">Allocation date</td><td>{sale.allocation_date ? fmtDate(sale.allocation_date) : 'Not scheduled'}</td></tr>
             <tr><td className="muted">Created by</td><td>{sale.creator || '—'} · {fmtDateTime(sale.created_at)}</td></tr>
             {sale.returned_reason && <tr><td className="muted">Returned reason</td><td>{sale.returned_reason}</td></tr>}
           </tbody></table>
@@ -93,7 +93,7 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
         </div>
       </div>
 
-      {((sale.status === 'DRAFT' && s.role === 'SALES' && sale.created_by === s.id) ||
+      {((sale.status === 'DRAFT' && String(s.role) === 'SALES' && sale.created_by === s.id) ||
         (sale.status === 'PENDING_SALES_APPROVAL' && (s.role === 'SALES_MANAGER' || String(s.role) === 'OPERATIONS_MANAGER' || s.role === 'SUPER_ADMIN'))) && (
         <div className="card" style={{ marginTop: 15 }}>
           <h3>{sale.status === 'DRAFT' ? 'Edit saved draft' : 'Edit sale before approval'}</h3>

@@ -6,7 +6,7 @@ import { getSale, listActiveApprovers } from '@/lib/queries';
 import { Badge } from '@/components/Badge';
 import { SaleActionPanel } from '@/app/sales/[id]/SaleActionPanel';
 import { availableSaleActions } from '@/lib/workflow/sale';
-import { naira, fmtDateTime, human } from '@/lib/format';
+import { naira, fmtDate, fmtDateTime, human } from '@/lib/format';
 import { SALE_STATUS_LABEL } from '@/lib/constants';
 
 export const dynamic = 'force-dynamic';
@@ -66,7 +66,7 @@ export default async function OperationsSaleDetail({ params }: { params: Promise
           <tr><td className="muted">Transaction</td><td>{sale.transaction_type === 'TOP_UP' ? 'Top-up' : 'Initial deposit'}</td></tr>
           <tr><td className="muted">Invoice / SO / SR / SI</td><td>{[sale.invoice_number, sale.sales_order_no, sale.sales_receipt_no, sale.sales_invoice_no].filter(Boolean).join(' · ') || '—'}</td></tr>
           <tr><td className="muted">Beneficiary</td><td>{sale.beneficiary_name || sale.client_name || '—'}{sale.beneficiary_phone ? ` · ${sale.beneficiary_phone}` : ''}</td></tr>
-          <tr><td className="muted">Allocation date</td><td>{sale.allocation_date || 'Not scheduled'}</td></tr>
+          <tr><td className="muted">Allocation date</td><td>{sale.allocation_date ? fmtDate(sale.allocation_date) : 'Not scheduled'}</td></tr>
         </tbody></table>
       </div>
 

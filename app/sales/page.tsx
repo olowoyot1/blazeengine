@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { requireCap } from '@/lib/guard';
 import { listSales, listClients } from '@/lib/queries';
 import { Badge } from '@/components/Badge';
-import { naira } from '@/lib/format';
+import { naira, fmtDate } from '@/lib/format';
 import { NewSaleForm } from './NewSaleForm';
 import { can } from '@/lib/rbac';
 
@@ -36,7 +36,7 @@ export default async function Sales({ searchParams }: { searchParams: Promise<{ 
               <td><b>{r.sale_reference || 'Reference pending'}</b></td><td>{r.client_name}</td><td>{r.property_name || '—'}</td><td>{r.plot_reference || '—'}</td>
               <td>{naira(r.amount)}</td><td>{naira(r.outstanding_balance ?? 0)}</td><td><Badge status={r.status} /></td>
               <td><Badge status={r.payment_status} label={(r.payment_status || 'PENDING').replace(/_/g, ' ')} /></td>
-              <td>{r.allocation_date || 'Not scheduled'}</td>
+              <td>{r.allocation_date ? fmtDate(r.allocation_date) : 'Not scheduled'}</td>
               <td><Link className="btn light" href={`/sales/${r.id}`}>Open</Link></td>
             </tr>
           ))}</tbody>
