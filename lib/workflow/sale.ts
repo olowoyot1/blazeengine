@@ -619,6 +619,7 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
   { name: 'description', label: 'Description', type: 'textarea' },
     { name: 'payment_proof_url', label: 'Payment evidence', type: 'file', uploadPurpose: 'sales_payment_evidence' },
     { name: 'payment_reference', label: 'Payment reference', type: 'text' },
+  { name: 'payment_bank', label: 'Receiving bank', type: 'select', options: ['Providus', 'Titan', 'Zenith'] },
     ...BENEFICIARY_FIELDS,
   ], normalizedInput);
   if (p.payment_proof_url && !p.payment_reference) throw new WorkflowError('Payment reference is required when payment evidence is uploaded');
@@ -633,12 +634,9 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
     const taken = await one(ctx,
       `select id, sale_reference, transaction_type from sales where lower(property_name)=lower($1) and lower(plot_reference)=lower($2) and status<>'CANCELLED' limit 1`,
       [p.property_name, p.plot_reference]);
-    if (taken) {
-      if (p.transaction_type === 'TOP_UP') {
-        throw new WorkflowError('This plot already has an active sale. A TOP-UP must be recorded against the existing sale, not created as a new sale. Open the existing sale and record the top-up there.');
-      }
-      throw new WorkflowError('This plot is already attached to another active sale (double-sale prevention). Check the estate and plot reference entered.');
-    }
+if (taken && p.transaction_type !== 'TOP_UP') {
+  throw new WorkflowError('This plot is already attached to another active sale (double-sale prevention). Check the estate and plot reference entered.');
+  }
     if (p.payment_proof_url) {
       await assertOwnedUpload(ctx, p.payment_proof_url, 'Payment evidence', 'sales_payment_evidence');
       await assertFreshEvidence(ctx, p.payment_proof_url, 'payment evidence');
@@ -648,10 +646,10 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
   if (!beneficiaryName || !beneficiaryPhone) throw new WorkflowError('Beneficiary full name and phone are required');
   const paymentStatus = p.payment_proof_url ? 'PROOF_SUBMITTED' : 'UNPAID';
   const s = (await one(ctx,
-`insert into sales(sale_reference,transaction_type,client_id,lead_id,client_name,client_email,property_name,plot_reference,amount,estate_value,payment_amount,quoted_amount,payment_plan,description,status,payment_status,payment_reference,created_by,
+`insert into sales(sale_reference,transaction_type,client_id,lead_id,client_name,client_email,property_name,plot_reference,amount,estate_value,payment_amount,quoted_amount,payment_plan,description,status,payment_status,payment_reference,payment_bank,created_by,
     beneficiary_name,beneficiary_phone,beneficiary_email,beneficiary_address,beneficiary_relationship)
   values('SALE-' || to_char(now(), 'YYYYMM') || '-' || lpad(nextval('sale_reference_seq')::text, 6, '0'), $1, $2,(select id from leads where client_id=$2 limit 1),$3,$4,$5,$6,$7,$8,$9,$7,$10,$11,'DRAFT',$12,$13,$14,$15,$16,$17,$18,$19) returning id, sale_reference`,
-  [p.transaction_type, client.id, client.name, client.email, p.property_name, p.plot_reference, p.estate_value, p.estate_value, p.payment_amount, p.payment_plan, p.description, paymentStatus, p.payment_reference ?? null, actor.id,
+  [p.transaction_type, client.id, client.name, client.email, p.property_name, p.plot_reference, p.estate_value, p.estate_value, p.payment_amount, p.payment_plan, p.description, paymentStatus, p.payment_reference ?? null, p.payment_bank ?? null, actor.id,
     beneficiaryName, beneficiaryPhone, p.beneficiary_email ?? null, p.beneficiary_address ?? null, p.beneficiary_relationship ?? 'Self']))!;
     if (p.payment_proof_url) {
       const m = String(p.payment_proof_url).match(/^\/api\/files\/([0-9a-f-]{36})$/i)!;

@@ -101,8 +101,9 @@ CREATE TABLE IF NOT EXISTS sales(
   description text,
   status text NOT NULL DEFAULT 'PENDING_SALES_APPROVAL',
   payment_status text NOT NULL DEFAULT 'UNPAID',
-  payment_reference text,
-  invoice_number text,
+	payment_reference text,
+	payment_bank text,
+	invoice_number text,
   sales_order_no text,
   sales_receipt_no text,
   sales_invoice_no text,
@@ -246,7 +247,8 @@ CREATE INDEX IF NOT EXISTS idx_leads_owner ON leads(owner_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status);
 CREATE INDEX IF NOT EXISTS idx_sales_status ON sales(status);
 -- A plot can be attached to only one live sale (double-sale prevention).
-CREATE UNIQUE INDEX IF NOT EXISTS uq_sales_live_plot ON sales(lower(property_name), lower(plot_reference)) WHERE status <> 'CANCELLED' AND property_name IS NOT NULL AND plot_reference IS NOT NULL;
+DROP INDEX IF EXISTS uq_sales_live_plot;
+  CREATE UNIQUE INDEX IF NOT EXISTS uq_sales_live_plot ON sales(lower(property_name), lower(plot_reference)) WHERE status <> 'CANCELLED' AND coalesce(transaction_type, 'INITIAL_DEPOSIT') <> 'TOP_UP' AND property_name IS NOT NULL AND plot_reference IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_sales_creator ON sales(created_by);
 CREATE INDEX IF NOT EXISTS idx_docs_sale ON sale_documents(sale_id);
 CREATE INDEX IF NOT EXISTS idx_ops_sale ON operations(sale_id, status);
