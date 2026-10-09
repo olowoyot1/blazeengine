@@ -7,7 +7,12 @@ import { ROLE_META } from '@/lib/constants';
 
 export default async function Shell({children,title,kicker,s,actions}:{children:React.ReactNode;title:string;kicker?:string;s:Session;actions?:React.ReactNode}){
   const path=(await headers()).get('x-invoke-path')||'';
-  const unread=await unreadCount(s.id);
+  let unread = 0;
+  try {
+    unread = await unreadCount(s.id);
+  } catch (error) {
+    console.error('[shell] notification count unavailable:', error);
+  }
   const general=NAV_GROUPS.find(g=>g.label==='General');
   const departments=NAV_GROUPS.filter(g=>g.label!=='General');
 

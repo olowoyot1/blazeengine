@@ -12,7 +12,14 @@ import { can } from '@/lib/rbac';
 export default async function Sales({ searchParams }: { searchParams: Promise<{ client_id?: string }> }) {
   const s = await requireCap('sale.read', 'sale.read_all');
   const { client_id: initialClientId } = await searchParams;
-  const [rows, clients] = await Promise.all([listSales(s), can(s.role, 'sale.create') ? listClients(200) : Promise.resolve([])]);
+  const [rowsResult, clientsResult] = await Promise.allSettled([
+    listSales(s),
+    can(s.role, 'sale.create') ? listClients(200) : Promise.resolve([]),
+  ]);
+  const rows = rowsResult.status === 'fulfilled' ? rowsResult.value : [];
+  const clients = clientsResult.status === 'fulfilled' ? clientsResult.value : [];
+  if (rowsResult.status === 'rejected') console.error('[sales-page] failed to load sales:', rowsResult.reason);
+  if (clientsResult.status === 'rejected') console.error('[sales-page] failed to load clients:', clientsResult.reason);
   return (
     <Shell s={s} title="Sales" kicker="Invoice → payment proof → approval chain → allocation"><div style={{display:"flex",gap:6}}><a className="btn" href="/api/export?type=sales&format=xls">Excel</a><a className="btn" href="/api/export?type=sales&format=pdf">PDF</a></div>
       {can(s.role, 'sale.create') && (
