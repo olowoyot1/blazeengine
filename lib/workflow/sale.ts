@@ -146,29 +146,27 @@ const daysFrom = (d: Date | string, n: number) => new Date(new Date(d).getTime()
 const isoDay = (d: Date) => d.toISOString().slice(0, 10);
 
 async function assertAllocationPaid(ctx: Ctx, s: Row) {
-  const currentRequired = Number(s.estate_value ?? s.quoted_amount ?? 0);
-  const currentPaid = Number(s.payment_amount ?? s.amount ?? 0);
-  if (String(s.payment_plan ?? '').toUpperCase() === 'OUTRIGHT' && currentRequired > 0 && currentPaid + 0.005 < currentRequired) {
-    throw new WorkflowError(`Allocation is blocked until the outright purchase is fully paid. Outstanding balance: ${money(currentRequired - currentPaid)}`);
-  }
-  if (!s.client_id) {
-    if (currentRequired > 0 && currentPaid + 0.005 < currentRequired) {
-      throw new WorkflowError(`Allocation is blocked until full payment is made. Outstanding balance: ${money(currentRequired - currentPaid)}`);
-    }
-    return;
-  }
-  const balance = await one(ctx, `
-    select greatest(0,
-      coalesce((select max(coalesce(estate_value, quoted_amount, amount, 0)) from sales where client_id=$1 and coalesce(transaction_type,'INITIAL_DEPOSIT') <> 'TOP_UP' and status <> 'CANCELLED'), 0)
-      - coalesce((select sum(coalesce(payment_amount, amount, 0)) from sales where client_id=$1 and status <> 'CANCELLED' and payment_status='VERIFIED'), 0)
-    ) as outstanding
-    from (select 1) x`, [s.client_id]);
-  const outstanding = Number(balance?.outstanding ?? 0);
+  const root = String(s.transaction_type ?? '').toUpperCase() === 'TOP_UP' && s.parent_sale_id
+    ? await one(ctx, `select * from sales where id=$1::uuid`, [s.parent_sale_id])
+    : s;
+  if (!root) throw new WorkflowError('The original sale for this transaction could not be found.');
+
+  const required = Number(root.estate_value ?? root.quoted_amount ?? root.amount ?? 0);
+  if (!(required > 0)) throw new WorkflowError('The original sale has no valid estate value.');
+
+  const paid = await one(ctx, `
+    select coalesce(sum(coalesce(payment_amount, amount, 0)),0) as paid
+    from sales
+    where status <> 'CANCELLED'
+      and (id=$1::uuid or parent_sale_id=$1::uuid)
+      and payment_status='VERIFIED'
+  `, [root.id]);
+  const verified = Number(paid?.paid ?? 0);
+  const outstanding = Math.max(0, required - verified);
   if (outstanding > 0.005) {
-    throw new WorkflowError(`Allocation is blocked until the customer's balance is fully paid. Outstanding balance: ${money(outstanding)}`);
+    throw new WorkflowError(`Allocation is blocked until the property is fully paid. Outstanding balance: ${money(outstanding)}`);
   }
 }
-
 export const SALE_CHAIN: Step[] = [
   { step: 'Sales Manager approval', role: 'SALES_MANAGER', seq: 1 },
   { step: 'Operations Manager approval', role: 'OPERATIONS_MANAGER', seq: 2 },
