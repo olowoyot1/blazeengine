@@ -640,7 +640,7 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
     { name: 'plot_reference', label: 'Plot reference', type: 'text', required: true },
 { name: 'estate_value', label: 'Estate value (₦)', type: 'number', required: true, min: 1 },
   { name: 'payment_amount', label: 'Payment amount (₦)', type: 'number', required: true, min: 1 },
-  { name: 'payment_plan', label: 'Payment plan', type: 'text', required: true },
+  { name: 'payment_plan', label: 'Payment plan', type: 'select', required: true, options: ['OUTRIGHT', 'INSTALLMENT'] },
   { name: 'transaction_type', label: 'Transaction type', type: 'select', required: true, options: ['INITIAL_DEPOSIT', 'TOP_UP'] },
   { name: 'description', label: 'Description', type: 'textarea' },
     { name: 'payment_proof_url', label: 'Payment evidence', type: 'file', uploadPurpose: 'sales_payment_evidence' },
@@ -649,6 +649,8 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
     ...BENEFICIARY_FIELDS,
   ], normalizedInput);
   if (p.payment_proof_url && !p.payment_reference) throw new WorkflowError('Payment reference is required when payment evidence is uploaded');
+  if (!/^[0-9a-f-]{36}$/i.test(String(p.client_id))) throw new WorkflowError('Client has an invalid format. Please select a client from the list.');
+  if (!['OUTRIGHT', 'INSTALLMENT'].includes(String(p.payment_plan))) throw new WorkflowError('Payment plan has an invalid value. Please select Outright or Installment.');
   const estateValue = Number(p.estate_value);
   const paymentAmount = Number(p.payment_amount);
   if (!Number.isFinite(estateValue) || estateValue <= 0) throw new WorkflowError('Estate value must be a valid amount greater than ₦0.');
