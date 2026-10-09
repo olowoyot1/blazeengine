@@ -1,6 +1,12 @@
 import { Pool } from 'pg';
 
-const connectionString = process.env.DATABASE_URL;
+const rawConnectionString = process.env.DATABASE_URL;
+// pg-connection-string will change the meaning of legacy SSL modes in its next
+// major release. Make the current full-verification behavior explicit now.
+const connectionString = rawConnectionString?.replace(
+  /([?&]sslmode=)(prefer|require|verify-ca)(?=(&|$))/i,
+  '$1verify-full',
+);
 
 type TestDatabase = {
   query?: (text: string, params?: unknown[]) => Promise<{ rows: Row[] }>;
