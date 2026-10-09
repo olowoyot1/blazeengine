@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
-import { sql } from '@/lib/db';
+import { authSql } from '@/lib/db';
 import { startSession } from '@/lib/auth';
 
 const MAX_ATTEMPTS = 5;
@@ -24,7 +24,7 @@ function clientKey(req: Request) {
  * requests all pass the check before any failure was written.
  */
 async function chargeIpAttempt(keyHash: string): Promise<number> {
-  const rows = await sql`insert into auth_rate_limits(key_hash,window_started_at,failures,updated_at)
+  const rows = await authSql`insert into auth_rate_limits(key_hash,window_started_at,failures,updated_at)
     values(${keyHash},now(),1,now())
     on conflict(key_hash) do update set
       failures=case when now()-auth_rate_limits.window_started_at >= (${IP_WINDOW_MINUTES} || ' minutes')::interval then 1 else auth_rate_limits.failures+1 end,
@@ -41,7 +41,7 @@ async function chargeIpAttempt(keyHash: string): Promise<number> {
  * A successful login resets the counter afterwards.
  */
 async function chargeAccountAttempt(userId: string): Promise<boolean> {
-  const rows = await sql`update users set
+  const rows = await authSql`update users set
       failed_attempts = case when locked_until is not null and locked_until <= now() then 1 else failed_attempts + 1 end,
       locked_until = case
         when (case when locked_until is not null and locked_until <= now() then 1 else failed_attempts + 1 end) >= ${MAX_ATTEMPTS}
@@ -68,7 +68,7 @@ export async function POST(req: Request) {
   try {
     // Keep authentication usable on production databases that have not yet received
     // the rate-limit migration. This DDL is idempotent and preserves existing counters.
-    await sql`create table if not exists auth_rate_limits (
+    await authSql`create table if not exists auth_rate_limits (
       key_hash text primary key,
       window_started_at timestamptz not null default now(),
       failures integer not null default 0,
@@ -82,8 +82,8 @@ export async function POST(req: Request) {
   let accountOpen = false;
   try {
     const rows = mode === 'pin'
-      ? await sql`select * from users where lower(username)=lower(${identifier}) and active limit 1`
-      : await sql`select * from users where lower(email)=lower(${identifier}) and active limit 1`;
+      ? await authSql`select * from users where lower(username)=lower(${identifier}) and active limit 1`
+      : await authSql`select * from users where lower(email)=lower(${identifier}) and active limit 1`;
     u = rows[0];
     if (u) accountOpen = await chargeAccountAttempt(u.id);
   } catch { return NextResponse.json({ error: 'The database is not reachable. Check DATABASE_URL and try again.' }, { status: 503 }); }
@@ -95,9 +95,9 @@ export async function POST(req: Request) {
 
   if (!u || !accountOpen || !secretOk || !modeOk) return NextResponse.json({ error: GENERIC_FAILURE }, { status: 401 });
 
-  await sql`update users set failed_attempts=0, locked_until=null where id=${u.id}`;
-  await sql`delete from auth_rate_limits where key_hash=${keyHash}`;
+  await authSql`update users set failed_attempts=0, locked_until=null where id=${u.id}`;
+  await authSql`delete from auth_rate_limits where key_hash=${keyHash}`;
   await startSession(u.id, Number(u.session_version ?? 0));
-  await sql`insert into audit_logs(user_id,action,entity_type,entity_id,metadata) values(${u.id},${mode === 'pin' ? 'LOGIN_PIN' : 'LOGIN'},'USER',${u.id},${JSON.stringify({ mode })})`;
+  await authSql`insert into audit_logs(user_id,action,entity_type,entity_id,metadata) values(${u.id},${mode === 'pin' ? 'LOGIN_PIN' : 'LOGIN'},'USER',${u.id},${JSON.stringify({ mode })})`;
   return NextResponse.json({ ok: true, needsPinSetup: !u.username || !u.pin_hash, loginMode: u.username && u.pin_hash ? 'pin' : 'password' });
 }
