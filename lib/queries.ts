@@ -21,7 +21,7 @@ export async function listSales(u: U, opts: { status?: string; statuses?: string
                     from sales p
                     where (p.id=coalesce(s.parent_sale_id, s.id) or p.parent_sale_id=coalesce(s.parent_sale_id, s.id))
                       and p.status <> 'CANCELLED'
-                      and p.payment_status='VERIFIED'), 0)
+            and p.payment_status in ('VERIFIED','PROOF_SUBMITTED')), 0)
       ) as outstanding_balance
     from sales s left join users c on c.id=s.created_by
     where (${sc.all}::boolean or (${sc.own}::boolean and s.created_by=${sc.uid}::uuid) or s.status = any(${sc.statuses}::text[]))
@@ -38,7 +38,7 @@ export async function getSale(u: U, id: string) {
         coalesce((select coalesce(root.estate_value, root.quoted_amount, root.amount, 0) from sales root where root.id=coalesce(s.parent_sale_id, s.id)), 0)
         - coalesce((select sum(coalesce(p.payment_amount, p.amount, 0)) from sales p
           where (p.id=coalesce(s.parent_sale_id, s.id) or p.parent_sale_id=coalesce(s.parent_sale_id, s.id))
-            and p.status <> 'CANCELLED' and p.payment_status='VERIFIED'), 0)
+            and p.status <> 'CANCELLED' and p.payment_status in ('VERIFIED','PROOF_SUBMITTED')), 0)
       ) as outstanding_balance
     from sales s left join users c on c.id=s.created_by
     where s.id=${id}::uuid and (${sc.all}::boolean or (${sc.own}::boolean and s.created_by=${sc.uid}::uuid) or s.status = any(${sc.statuses}::text[]))`;
