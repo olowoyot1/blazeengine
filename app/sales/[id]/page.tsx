@@ -2,6 +2,7 @@ import Shell from '@/components/Shell';
 import { notFound, redirect } from 'next/navigation';
 import { requireCap } from '@/lib/guard';
 import { getSale, listActiveApprovers } from '@/lib/queries';
+import { sql } from '@/lib/db';
 import { Badge } from '@/components/Badge';
 import { ApprovalDecisionPanel } from '@/components/ApprovalDecisionPanel';
 import { naira, fmtDateTime, human } from '@/lib/format';
@@ -18,6 +19,27 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
   const { id } = await params;
   const s = await requireCap('sale.read', 'sale.read_all', 'ops.workspace');
   if (s.role === 'OPERATIONS' || s.role === 'OPERATIONS_MANAGER') redirect(`/operations/sales/${encodeURIComponent(id)}`);
+  if (s.role === 'SALES') {
+    const ownerRows = await sql`select s.*, c.name creator from sales s left join users c on c.id=s.created_by where s.id=${id}::uuid and s.created_by=${s.id}::uuid`;
+    const sale = ownerRows[0];
+    if (!sale) notFound();
+    return (
+      <Shell s={s} title={`${sale.client_name} — ${sale.plot_reference || sale.property_name || ''}`} kicker="Sale">
+        <div className="card">
+          <div className="section-title"><h3>Sale Information</h3><div style={{display:'flex',gap:8,alignItems:'center'}}><span className="badge">{sale.sale_reference || 'Reference pending'}</span><Badge status={sale.status} label={SALE_STATUS_LABEL[sale.status] ?? sale.status} /></div></div>
+          <table className="table"><tbody>
+            <tr><td className="muted">Client</td><td>{sale.client_name || '—'}{sale.client_email ? ` (${sale.client_email})` : ''}</td></tr>
+            <tr><td className="muted">Property / Plot</td><td>{sale.property_name || '—'} / {sale.plot_reference || '—'}</td></tr>
+            <tr><td className="muted">Estate value</td><td>{naira(sale.estate_value ?? sale.quoted_amount ?? sale.amount)}</td></tr>
+            <tr><td className="muted">Payment</td><td>{naira(sale.payment_amount ?? sale.amount)} · {String(sale.payment_plan || '').replace(/_/g,' ') || '—'} · {String(sale.payment_status || 'PENDING').replace(/_/g,' ')}</td></tr>
+            <tr><td className="muted">Transaction</td><td>{sale.transaction_type === 'TOP_UP' ? 'Top-up' : 'Initial deposit'}</td></tr>
+            <tr><td className="muted">Beneficiary</td><td>{sale.beneficiary_name || sale.client_name || '—'}{sale.beneficiary_phone ? ` · ${sale.beneficiary_phone}` : ''}</td></tr>
+            <tr><td className="muted">Created</td><td>{fmtDateTime(sale.created_at)}</td></tr>
+          </tbody></table>
+        </div>
+      </Shell>
+    );
+  }
   const results = await Promise.allSettled([getSale(s, id), listActiveApprovers()]);
   const data = results[0].status === 'fulfilled' ? results[0].value : null;
   const approvers = results[1].status === 'fulfilled' ? results[1].value : [];
