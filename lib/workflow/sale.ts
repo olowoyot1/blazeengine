@@ -162,7 +162,7 @@ async function assertAllocationPaid(ctx: Ctx, s: Row) {
       coalesce((select max(coalesce(estate_value, quoted_amount, amount, 0)) from sales where client_id=$1 and coalesce(transaction_type,'INITIAL_DEPOSIT') <> 'TOP_UP' and status <> 'CANCELLED'), 0)
       - coalesce((select sum(coalesce(payment_amount, amount, 0)) from sales where client_id=$1 and status <> 'CANCELLED' and payment_status='VERIFIED'), 0)
     ) as outstanding
-    from (select 1) x`, [s.client_id]);[s.client_id]);
+    from (select 1) x`, [s.client_id]);
   const outstanding = Number(balance?.outstanding ?? 0);
   if (outstanding > 0.005) {
     throw new WorkflowError(`Allocation is blocked until the customer's balance is fully paid. Outstanding balance: ${money(outstanding)}`);
