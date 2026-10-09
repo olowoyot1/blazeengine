@@ -4,7 +4,10 @@ import { NextResponse, type NextRequest } from 'next/server';
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const withPath = (res: NextResponse) => { res.headers.set('x-invoke-path', pathname); return res; };
-  if (pathname === '/login' || pathname.startsWith('/api/auth')) return withPath(NextResponse.next());
+  const isPublic = pathname === '/login' || pathname === '/api/auth' || pathname.startsWith('/api/auth/')
+    // Server-to-server integration: authenticated by its own bearer secret, never carries a session cookie.
+    || pathname === '/api/integrations/lbl';
+  if (isPublic) return withPath(NextResponse.next());
   const token = req.cookies.get('lb_session')?.value;
   // Do not verify JWTs in middleware. Next.js middleware runs on the Edge runtime,
   // while the full session verification (including JWT validation and database
