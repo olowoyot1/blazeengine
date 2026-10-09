@@ -9,6 +9,7 @@ const LOCK_MINUTES = 15;
 const IP_WINDOW_MINUTES = 15;
 const MAX_IP_FAILURES = 30;
 const GENERIC_FAILURE = 'Invalid credentials';
+const DUMMY_HASH = '$2b$12$CwTycUXWue0Thq9StjUM0uJ8kTGXG9m2N9nzL3HrfoWFPd6IUZKQC';
 
 function clientKey(req: Request) {
   const forwarded = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
@@ -17,26 +18,45 @@ function clientKey(req: Request) {
   return crypto.createHash('sha256').update(ip).digest('hex');
 }
 
-async function ipRateLimited(keyHash: string) {
-  const rows = await sql`select window_started_at, failures from auth_rate_limits where key_hash=${keyHash} limit 1`;
-  if (!rows[0]) return false;
-  if (Date.now() - new Date(rows[0].window_started_at).getTime() >= IP_WINDOW_MINUTES * 60000) {
-    await sql`update auth_rate_limits set window_started_at=now(), failures=0, updated_at=now() where key_hash=${keyHash}`;
-    return false;
-  }
-  return Number(rows[0].failures) >= MAX_IP_FAILURES;
-}
-
-async function recordIpFailure(keyHash: string) {
-  await sql`insert into auth_rate_limits(key_hash,window_started_at,failures,updated_at)
+/**
+ * Atomically counts this attempt against the IP window BEFORE any password check and
+ * returns the new count. Checking first and recording later let a parallel burst of
+ * requests all pass the check before any failure was written.
+ */
+async function chargeIpAttempt(keyHash: string): Promise<number> {
+  const rows = await sql`insert into auth_rate_limits(key_hash,window_started_at,failures,updated_at)
     values(${keyHash},now(),1,now())
     on conflict(key_hash) do update set
       failures=case when now()-auth_rate_limits.window_started_at >= (${IP_WINDOW_MINUTES} || ' minutes')::interval then 1 else auth_rate_limits.failures+1 end,
       window_started_at=case when now()-auth_rate_limits.window_started_at >= (${IP_WINDOW_MINUTES} || ' minutes')::interval then now() else auth_rate_limits.window_started_at end,
-      updated_at=now()`;
+      updated_at=now()
+    returning failures`;
+  return Number(rows[0]?.failures ?? 0);
+}
+
+/**
+ * Reserves one attempt on the account in a single row-locked UPDATE before bcrypt runs.
+ * Concurrent requests serialize on the row, so once the limit is reached every further
+ * request (including ones already in flight) sees the lock. Returns false when locked.
+ * A successful login resets the counter afterwards.
+ */
+async function chargeAccountAttempt(userId: string): Promise<boolean> {
+  const rows = await sql`update users set
+      failed_attempts = case when locked_until is not null and locked_until <= now() then 1 else failed_attempts + 1 end,
+      locked_until = case
+        when (case when locked_until is not null and locked_until <= now() then 1 else failed_attempts + 1 end) >= ${MAX_ATTEMPTS}
+          then now() + (${LOCK_MINUTES} || ' minutes')::interval
+        else null end
+    where id=${userId} and (locked_until is null or locked_until <= now())
+    returning id`;
+  return rows.length > 0;
 }
 
 export async function POST(req: Request) {
+  // Requiring a JSON content type blocks cross-site HTML form posts (login CSRF).
+  if (!req.headers.get('content-type')?.toLowerCase().includes('application/json'))
+    return NextResponse.json({ error: 'Invalid request' }, { status: 415 });
+
   const keyHash = clientKey(req);
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Invalid request' }, { status: 400 }); }
@@ -46,31 +66,26 @@ export async function POST(req: Request) {
   if (!identifier || !secret) return NextResponse.json({ error: GENERIC_FAILURE }, { status: 401 });
 
   try {
-    if (await ipRateLimited(keyHash)) return NextResponse.json({ error: GENERIC_FAILURE }, { status: 429, headers: { 'Retry-After': String(IP_WINDOW_MINUTES * 60) } });
+    if (await chargeIpAttempt(keyHash) > MAX_IP_FAILURES)
+      return NextResponse.json({ error: GENERIC_FAILURE }, { status: 429, headers: { 'Retry-After': String(IP_WINDOW_MINUTES * 60) } });
   } catch { return NextResponse.json({ error: 'Authentication service is temporarily unavailable' }, { status: 503 }); }
 
-  let rows;
+  let u: any;
+  let accountOpen = false;
   try {
-    rows = mode === 'pin'
+    const rows = mode === 'pin'
       ? await sql`select * from users where lower(username)=lower(${identifier}) and active limit 1`
       : await sql`select * from users where lower(email)=lower(${identifier}) and active limit 1`;
+    u = rows[0];
+    if (u) accountOpen = await chargeAccountAttempt(u.id);
   } catch { return NextResponse.json({ error: 'The database is not reachable. Check DATABASE_URL and try again.' }, { status: 503 }); }
 
-  const u = rows[0];
-  const dummyHash = '$2b$12$CwTycUXWue0Thq9StjUM0uJ8kTGXG9m2N9nzL3HrfoWFPd6IUZKQC';
-  const locked = !!u?.locked_until && new Date(u.locked_until) > new Date();
-  const hash = mode === 'pin' ? (u?.pin_hash ?? dummyHash) : (u?.password_hash ?? dummyHash);
-  const ok = !locked && await bcrypt.compare(secret, hash);
+  // Always run bcrypt so unknown, locked and valid accounts take the same time to answer.
+  const hash = mode === 'pin' ? (u?.pin_hash ?? DUMMY_HASH) : (u?.password_hash ?? DUMMY_HASH);
+  const secretOk = await bcrypt.compare(secret, hash);
+  const modeOk = !!u && (mode === 'pin' ? !!u.username : !u.pin_hash);
 
-  if (!u || !ok || (mode === 'pin' && !u.username) || (mode === 'password' && !!u.pin_hash)) {
-    try { await recordIpFailure(keyHash); } catch { /* account lockout remains the fallback control */ }
-    if (u && !locked) {
-      const attempts = (u.failed_attempts ?? 0) + 1;
-      const lock = attempts >= MAX_ATTEMPTS;
-      await sql`update users set failed_attempts=${attempts}, locked_until=${lock ? new Date(Date.now() + LOCK_MINUTES * 60000).toISOString() : null} where id=${u.id}`;
-    }
-    return NextResponse.json({ error: GENERIC_FAILURE }, { status: 401 });
-  }
+  if (!u || !accountOpen || !secretOk || !modeOk) return NextResponse.json({ error: GENERIC_FAILURE }, { status: 401 });
 
   await sql`update users set failed_attempts=0, locked_until=null where id=${u.id}`;
   await sql`delete from auth_rate_limits where key_hash=${keyHash}`;
