@@ -283,10 +283,16 @@ export const SALE_ACTIONS: SaleAction[] = [
       // require a *different* Sales Manager — one person shouldn't bless the same
       // sale twice under two different hats.
       await ctx.tx.query(`update sales set gate_approved_by=$2 where id=$1`, [s.id, ctx.actor.id]);
-      await openTask(ctx, s.id, 'SALE_DOCUMENTS');
-      const n = { title: 'Approved sale received', message: `${saleLabel(s)}. Create the Contract of Sale and Letter of Acknowledgment.`, link: saleLink(s) };
-      await notifyRoles(ctx, OPS, n);
-      await notifyUsers(ctx, [s.created_by], { ...n, title: 'Your sale was approved', message: `${saleLabel(s)} is with Operations.` });
+      if (s.transaction_type === 'TOP_UP') {
+        const n = { title: 'Approved top-up received', message: `${saleLabel(s)}. The top-up receipt is ready; continue the top-up to allocation. No contract or acknowledgement is required.`, link: saleLink(s) };
+        await notifyRoles(ctx, OPS, n);
+        await notifyUsers(ctx, [s.created_by], { ...n, title: 'Your top-up was approved', message: `${saleLabel(s)} top-up is with Operations for the next step.` });
+      } else {
+        await openTask(ctx, s.id, 'SALE_DOCUMENTS');
+        const n = { title: 'Approved sale received', message: `${saleLabel(s)}. Create the Contract of Sale and Letter of Acknowledgment.`, link: saleLink(s) };
+        await notifyRoles(ctx, OPS, n);
+        await notifyUsers(ctx, [s.created_by], { ...n, title: 'Your sale was approved', message: `${saleLabel(s)} is with Operations.` });
+      }
     },
   },
   {
