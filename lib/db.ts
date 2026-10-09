@@ -1,7 +1,6 @@
 import { Pool } from 'pg';
 
 const rawConnectionString = process.env.DATABASE_URL;
-
 function normalizeDatabaseUrl(value: string | undefined) {
   if (!value) return value;
   try {
