@@ -284,9 +284,13 @@ export const SALE_ACTIONS: SaleAction[] = [
       // sale twice under two different hats.
       await ctx.tx.query(`update sales set gate_approved_by=$2 where id=$1`, [s.id, ctx.actor.id]);
       if (s.transaction_type === 'TOP_UP') {
-        const n = { title: 'Approved top-up received', message: `${saleLabel(s)}. The top-up receipt is ready; continue the top-up to allocation. No contract or acknowledgement is required.`, link: saleLink(s) };
-        await notifyRoles(ctx, OPS, n);
-        await notifyUsers(ctx, [s.created_by], { ...n, title: 'Your top-up was approved', message: `${saleLabel(s)} top-up is with Operations for the next step.` });
+        // Top-ups do not need a manual continuation click after approval.
+        await ctx.tx.query(`update sales set ops_due_date = current_date + ${ALLOCATION_WINDOW_DAYS} where id=$1`, [s.id]);
+        await openTask(ctx, s.id, 'ALLOCATION_DOCS', ALLOCATION_WINDOW_DAYS, 'Deed of assignment + survey plan');
+        await ctx.tx.query(`update sales set status='SITE_NOTIFIED', updated_at=now() where id=$1`, [s.id]);
+        const n = { title: 'Top-up approved — sale prepared for allocation', message: `${saleLabel(s)}. The top-up receipt is ready. No contract, acknowledgement, invoice or sales order is required. Site Management can now prepare the allocation documents.`, link: saleLink(s) };
+        await notifyRoles(ctx, ['SITE_MANAGER', ...OPS], n);
+        await notifyUsers(ctx, [s.created_by], { ...n, title: 'Top-up approved — allocation preparation started' });
       } else {
         await openTask(ctx, s.id, 'SALE_DOCUMENTS');
         const n = { title: 'Approved sale received', message: `${saleLabel(s)}. Create the Contract of Sale and Letter of Acknowledgment.`, link: saleLink(s) };
