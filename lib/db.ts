@@ -57,6 +57,7 @@ async function ensureApprovalSchema() {
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'PENDING_SALES_APPROVAL';
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS payment_status text NOT NULL DEFAULT 'UNPAID';
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS payment_reference text;
+  ALTER TABLE sales ADD COLUMN IF NOT EXISTS payment_bank text;
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS sales_order_no text;
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS sales_receipt_no text;
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS sales_invoice_no text;
@@ -76,6 +77,8 @@ async function ensureApprovalSchema() {
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS sale_reference text;
       UPDATE sales SET sale_reference = 'SALE-' || to_char(created_at, 'YYYYMM') || '-' || upper(substr(replace(id::text, '-', ''), 1, 8)) WHERE sale_reference IS NULL;
       CREATE UNIQUE INDEX IF NOT EXISTS sales_sale_reference_unique ON sales(sale_reference);
+      DROP INDEX IF EXISTS uq_sales_live_plot;
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_sales_live_plot ON sales(lower(property_name), lower(plot_reference)) WHERE status <> 'CANCELLED' AND coalesce(transaction_type, 'INITIAL_DEPOSIT') <> 'TOP_UP' AND property_name IS NOT NULL AND plot_reference IS NOT NULL;
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS invoice_number text;
       CREATE SEQUENCE IF NOT EXISTS invoice_number_seq;
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS approved_at timestamptz;
