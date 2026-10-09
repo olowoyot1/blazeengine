@@ -401,6 +401,22 @@ export async function query(text: string, params?: unknown[]) {
   return pool.query(text, params);
 }
 
+/** Authentication queries bypass the broad application schema-convergence routine.
+ * Login must remain available even if an unrelated module's migration is failing.
+ */
+export async function authSql(strings: TemplateStringsArray, ...values: unknown[]) {
+  if (testDatabase()) return testDatabase()!.sql(strings, ...values);
+  if (!connectionString) throw new Error('DATABASE_URL is not configured');
+  let text = strings[0];
+  const params: unknown[] = [];
+  for (let i = 0; i < values.length; i += 1) {
+    params.push(values[i]);
+    text += `${params.length}${strings[i + 1]}`;
+  }
+  const result = await pool.query(text, params);
+  return result.rows;
+}
+
 export async function sql(strings: TemplateStringsArray, ...values: unknown[]) {
   if (testDatabase()) return testDatabase()!.sql(strings, ...values);
   let text = strings[0];
