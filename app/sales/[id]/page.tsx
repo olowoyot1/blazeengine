@@ -20,7 +20,7 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
   const s = await requireCap('sale.read', 'sale.read_all', 'ops.workspace');
   if (s.role === 'OPERATIONS' || s.role === 'OPERATIONS_MANAGER') redirect(`/operations/sales/${encodeURIComponent(id)}`);
   if (s.role === 'SALES') {
-    const ownerRows = await sql`select s.*, c.name creator from sales s left join users c on c.id=s.created_by where s.id=${id}::uuid and s.created_by=${s.id}::uuid`;
+    const ownerRows = await sql`select sale.*, c.name creator from sales sale left join users c on c.id=sale.created_by where sale.id=${id}::uuid and sale.created_by=${s.id}::uuid`;
     const sale = ownerRows[0];
     if (!sale) notFound();
     return (
