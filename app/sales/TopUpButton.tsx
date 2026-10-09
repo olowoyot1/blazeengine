@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { newSale } from '@/lib/actions';
+import { topUpSale } from '@/lib/actions';
 
 const BANKS = ['Providus', 'Titan', 'Zenith'] as const;
 
@@ -19,20 +19,10 @@ export function TopUpButton({ sale }: { sale: { id: string; client_id?: string; 
     event.preventDefault();
     setError('');
     start(async () => {
-      const result = await newSale({
-        topup_sale_id: sale.id,
-        client_id: sale.client_id,
-        property_name: sale.property_name,
-        plot_reference: sale.plot_reference,
-        estate_value: sale.estate_value,
-        payment_plan: sale.payment_plan,
-        beneficiary_name: sale.beneficiary_name,
-        beneficiary_phone: sale.beneficiary_phone,
+      const result = await topUpSale(sale.id, {
         payment_amount: amount,
-        amount,
         payment_bank: bank,
         payment_reference: reference,
-        transaction_type: 'TOP_UP',
       });
       if ('error' in result) setError(result.error);
       else { setOpen(false); setAmount(''); setBank(''); setReference(''); router.refresh(); }

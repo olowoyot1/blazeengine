@@ -11,7 +11,7 @@ import { sendNewsletter, newsletterConfigured } from './newsletter';
 import { WorkflowError, ForbiddenError } from './workflow/core';
 import { decide } from './workflow/approvals';
 import { submitPayroll, disbursePayroll } from './workflow/payroll';
-import { performSaleAction, createSale, updateSale, changeBeneficiary } from './workflow/sale';
+import { performSaleAction, createSale, recordSaleTopUp, updateSale, changeBeneficiary } from './workflow/sale';
 import { performExpenseAction, createNegotiation, createDirectExpense } from './workflow/expense';
 import { createLead, setLeadStatus, convertLead } from './workflow/leads';
 import { ROLES, type Role } from './constants';
@@ -63,6 +63,12 @@ export async function changeSaleBeneficiary(saleId: string, input: Record<string
   try { const id = await changeBeneficiary(s, saleId, input); revalidatePath(`/sales/${saleId}`); revalidatePath('/sales'); revalidatePath('/notifications'); return { ok: true, id }; }
   catch (e) { return toErr(e); }
 }
+export async function topUpSale(saleId: string, input: Record<string, unknown>): Promise<Result> {
+  const s = await requireUser();
+  try { const id = await recordSaleTopUp(s, saleId, input); revalidatePath(`/sales/${saleId}`); revalidatePath('/sales'); revalidatePath('/notifications'); return { ok: true, id }; }
+  catch (e) { return toErr(e); }
+}
+
 export async function newSale(input: Record<string, unknown>): Promise<Result> {
   const s = await requireUser();
   try { const id = await createSale(s, input); revalidatePath('/sales'); revalidatePath('/notifications'); return { ok: true, id }; }

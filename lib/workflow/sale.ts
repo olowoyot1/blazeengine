@@ -599,6 +599,28 @@ export async function updateSale(actor: Actor, saleId: string, input: Record<str
   });
 }
 
+export async function recordSaleTopUp(actor: Actor, saleId: string, input: Record<string, unknown>) {
+  if (actor.role !== 'SUPER_ADMIN' && !['SALES', 'SALES_MANAGER'].includes(actor.role)) throw new ForbiddenError('Only the sales team can record top-ups');
+  const p = parseFields([
+    { name: 'payment_amount', label: 'Top-up amount (₦)', type: 'number', required: true, min: 1 },
+    { name: 'payment_reference', label: 'Payment reference', type: 'text', required: true },
+    { name: 'payment_bank', label: 'Receiving bank', type: 'select', required: true, options: ['Providus', 'Titan', 'Zenith'] },
+  ], input);
+  const paymentAmount = Number(p.payment_amount);
+  if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) throw new WorkflowError('Top-up amount must be greater than ₦0.');
+  return run(actor, async ctx => {
+    const sale = await one(ctx, `select * from sales where id=$1 and status<>'CANCELLED'`, [saleId]);
+    if (!sale) throw new WorkflowError('The existing sale could not be found.');
+    const topup = await one(ctx, `insert into sales(sale_reference, transaction_type, parent_sale_id, client_id, lead_id, client_name, client_email, property_name, plot_reference, amount, estate_value, payment_amount, quoted_amount, payment_plan, description, status, payment_status, payment_reference, payment_bank, created_by, beneficiary_name, beneficiary_phone, beneficiary_email, beneficiary_address, beneficiary_relationship)
+      values('TOPUP-' || to_char(now(), 'YYYYMM') || '-' || lpad(nextval('sale_reference_seq')::text, 6, '0'), 'TOP_UP', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $11, 'Top-up for ' || $12, 'DRAFT', 'UNPAID', $13, $14, $15, $16, $17, $18, $19, $20)
+      returning id`, [sale.id, sale.client_id, sale.lead_id, sale.client_name, sale.client_email, sale.property_name, sale.plot_reference, paymentAmount, sale.estate_value, sale.payment_plan, sale.sale_reference, p.payment_reference, p.payment_bank, actor.id, sale.beneficiary_name, sale.beneficiary_phone, sale.beneficiary_email, sale.beneficiary_address, sale.beneficiary_relationship]);
+    if (!topup) throw new WorkflowError('The top-up could not be linked to the existing sale.');
+    await logEvent(ctx, 'SALE', topup.id, 'SALES', 'Top-up linked to existing sale', null, 'DRAFT', `${sale.sale_reference} · ${money(paymentAmount)}`);
+    await audit(ctx, 'SALE_TOPUP_CREATED', 'SALE', topup.id, { parent_sale_id: sale.id, sale_reference: sale.sale_reference, amount: paymentAmount, bank: p.payment_bank });
+    return topup.id as string;
+  });
+}
+
 export async function createSale(actor: Actor, input: Record<string, unknown>) {
   if (actor.role !== 'SUPER_ADMIN' && !['SALES', 'SALES_MANAGER'].includes(actor.role)) throw new ForbiddenError('Only the sales team can create sales');
   const normalizedInput = {

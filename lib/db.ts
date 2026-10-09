@@ -39,8 +39,9 @@ async function ensureApprovalSchema() {
   if (!connectionString) return;
   if (!schemaReady) {
     schemaReady = pool.query(`
-      ALTER TABLE approvals ADD COLUMN IF NOT EXISTS approver_user_id uuid;
-      ALTER TABLE sales ADD COLUMN IF NOT EXISTS transaction_type text NOT NULL DEFAULT 'INITIAL_DEPOSIT';
+  ALTER TABLE approvals ADD COLUMN IF NOT EXISTS approver_user_id uuid;
+  ALTER TABLE sales ADD COLUMN IF NOT EXISTS transaction_type text NOT NULL DEFAULT 'INITIAL_DEPOSIT';
+  ALTER TABLE sales ADD COLUMN IF NOT EXISTS parent_sale_id uuid REFERENCES sales(id);
       -- Keep older production databases compatible with the current sale-create workflow.
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS client_id uuid REFERENCES clients(id);
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS lead_id uuid REFERENCES leads(id);

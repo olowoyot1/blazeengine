@@ -121,7 +121,8 @@ CREATE TABLE IF NOT EXISTS sales(
 );
 
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS sale_reference text;
-ALTER TABLE sales ADD COLUMN IF NOT EXISTS transaction_type text NOT NULL DEFAULT 'INITIAL_DEPOSIT';
+  ALTER TABLE sales ADD COLUMN IF NOT EXISTS transaction_type text NOT NULL DEFAULT 'INITIAL_DEPOSIT';
+  ALTER TABLE sales ADD COLUMN IF NOT EXISTS parent_sale_id uuid REFERENCES sales(id);
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS beneficiary_name text;
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS beneficiary_phone text;
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS beneficiary_email text;
