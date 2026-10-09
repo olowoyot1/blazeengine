@@ -621,8 +621,21 @@ export async function recordSaleTopUp(actor: Actor, saleId: string, input: Recor
   const paymentAmount = Number(p.payment_amount);
   if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) throw new WorkflowError('Top-up amount must be greater than ₦0.');
   return run(actor, async ctx => {
-    const sale = await one(ctx, `select * from sales where id=$1 and status<>'CANCELLED'`, [saleId]);
+    const sale = await one(ctx, `select * from sales where id=$1 and status<>'CANCELLED' for update`, [saleId]);
     if (!sale) throw new WorkflowError('The existing sale could not be found.');
+    if (String(sale.transaction_type ?? 'INITIAL_DEPOSIT').toUpperCase() === 'TOP_UP') {
+      throw new WorkflowError('A top-up must always be linked to the original sale, not another top-up.');
+    }
+    if (actor.role === 'SALES' && sale.created_by !== actor.id) {
+      throw new ForbiddenError('You can only record a top-up against a sale you created.');
+    }
+    const estateValue = Number(sale.estate_value ?? sale.quoted_amount ?? sale.amount ?? 0);
+    const committed = await one(ctx, `select coalesce(sum(coalesce(payment_amount, amount, 0)),0) as committed from sales where (id=$1::uuid or parent_sale_id=$1::uuid) and status <> 'CANCELLED'`, [sale.id]);
+    const committedAmount = Number(committed?.committed ?? 0);
+    if (!(estateValue > 0)) throw new WorkflowError('The original sale has no valid estate value.');
+    if (committedAmount + paymentAmount > estateValue + 0.005) {
+      throw new WorkflowError(`This top-up exceeds the remaining balance of ${money(Math.max(0, estateValue - committedAmount))} on the original sale.`);
+    }
     await assertOwnedUpload(ctx, p.payment_proof_url, 'Payment proof', 'sales_payment_evidence');
     await assertFreshEvidence(ctx, p.payment_proof_url, 'payment proof');
     const topup = await one(ctx, `insert into sales(sale_reference, transaction_type, parent_sale_id, client_id, lead_id, client_name, client_email, property_name, plot_reference, amount, estate_value, payment_amount, quoted_amount, payment_plan, description, status, payment_status, payment_reference, payment_bank, created_by, beneficiary_name, beneficiary_phone, beneficiary_email, beneficiary_address, beneficiary_relationship)
