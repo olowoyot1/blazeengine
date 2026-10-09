@@ -702,7 +702,7 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
       beneficiary_address, beneficiary_relationship
     )
     values(
-      $1, $2, $3, $4, (select id from leads where client_id=$4 limit 1),
+      $1 || to_char(now(), 'YYYYMM') || '-' || lpad(nextval('sale_reference_seq')::text, 6, '0'), $2, $3, $4, (select id from leads where client_id=$4 limit 1),
       $5, $6, $7, $8,
       $9, $10, $11, $12, $13,
       $14, 'DRAFT', $15, $16, $17,
@@ -710,7 +710,7 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
     )
     returning id, sale_reference`,
     [
-      `${salePrefix}${new Date().toISOString().slice(0, 7).replace('-', '')}-${String(Math.floor(Math.random() * 900000) + 100000)}`,
+      salePrefix,
       p.transaction_type,
       baseSale?.id ?? null,
       client.id,
