@@ -93,7 +93,7 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
         </div>
       </div>
 
-      {((sale.status === 'DRAFT' && s.role === 'SALES' && sale.created_by === s.id) ||
+      {((sale.status === 'DRAFT' && String(s.role) === 'SALES' && sale.created_by === s.id) ||
         (sale.status === 'PENDING_SALES_APPROVAL' && (s.role === 'SALES_MANAGER' || String(s.role) === 'OPERATIONS_MANAGER' || s.role === 'SUPER_ADMIN'))) && (
         <div className="card" style={{ marginTop: 15 }}>
           <h3>{sale.status === 'DRAFT' ? 'Edit saved draft' : 'Edit sale before approval'}</h3>
