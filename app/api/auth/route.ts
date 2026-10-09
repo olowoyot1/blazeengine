@@ -66,6 +66,14 @@ export async function POST(req: Request) {
   if (!identifier || !secret) return NextResponse.json({ error: GENERIC_FAILURE }, { status: 401 });
 
   try {
+    // Keep authentication usable on production databases that have not yet received
+    // the rate-limit migration. This DDL is idempotent and preserves existing counters.
+    await sql`create table if not exists auth_rate_limits (
+      key_hash text primary key,
+      window_started_at timestamptz not null default now(),
+      failures integer not null default 0,
+      updated_at timestamptz not null default now()
+    )`;
     if (await chargeIpAttempt(keyHash) > MAX_IP_FAILURES)
       return NextResponse.json({ error: GENERIC_FAILURE }, { status: 429, headers: { 'Retry-After': String(IP_WINDOW_MINUTES * 60) } });
   } catch { return NextResponse.json({ error: 'Authentication service is temporarily unavailable' }, { status: 503 }); }
