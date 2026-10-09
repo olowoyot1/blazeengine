@@ -41,6 +41,7 @@ async function ensureApprovalSchema() {
     schemaReady = pool.query(`
       ALTER TABLE approvals ADD COLUMN IF NOT EXISTS approver_user_id uuid;
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS transaction_type text NOT NULL DEFAULT 'INITIAL_DEPOSIT';
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS parent_sale_id uuid REFERENCES sales(id) ON DELETE SET NULL;
       -- Keep older production databases compatible with the current sale-create workflow.
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS client_id uuid REFERENCES clients(id);
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS lead_id uuid REFERENCES leads(id);
@@ -77,6 +78,7 @@ async function ensureApprovalSchema() {
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS sale_reference text;
       UPDATE sales SET sale_reference = 'SALE-' || to_char(created_at, 'YYYYMM') || '-' || upper(substr(replace(id::text, '-', ''), 1, 8)) WHERE sale_reference IS NULL;
       CREATE UNIQUE INDEX IF NOT EXISTS sales_sale_reference_unique ON sales(sale_reference);
+      CREATE INDEX IF NOT EXISTS idx_sales_parent_sale ON sales(parent_sale_id, created_at);
       DROP INDEX IF EXISTS uq_sales_live_plot;
       CREATE UNIQUE INDEX IF NOT EXISTS uq_sales_live_plot ON sales(lower(property_name), lower(plot_reference)) WHERE status <> 'CANCELLED' AND coalesce(transaction_type, 'INITIAL_DEPOSIT') <> 'TOP_UP' AND property_name IS NOT NULL AND plot_reference IS NOT NULL;
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS invoice_number text;
@@ -97,6 +99,12 @@ async function ensureApprovalSchema() {
         created_at timestamptz NOT NULL DEFAULT now()
       );
       CREATE INDEX IF NOT EXISTS sale_beneficiary_changes_sale_idx ON sale_beneficiary_changes(sale_id, created_at);
+      -- Top-ups are separate payment transactions linked to an existing sale.
+      -- Rebuild the plot guard so top-ups never conflict with the one-live-sale rule.
+      DROP INDEX IF EXISTS uq_sales_live_plot;
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_sales_live_plot ON sales(lower(property_name), lower(plot_reference))
+        WHERE status <> 'CANCELLED' AND coalesce(transaction_type, 'INITIAL_DEPOSIT') <> 'TOP_UP'
+          AND property_name IS NOT NULL AND plot_reference IS NOT NULL;
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS allocation_date date;
       ALTER TABLE expenses ADD COLUMN IF NOT EXISTS negotiated_amount numeric;
       ALTER TABLE expenses ADD COLUMN IF NOT EXISTS paid_at timestamptz;
