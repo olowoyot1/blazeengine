@@ -542,10 +542,17 @@ export const getSaleAction = (k: string) => BY_KEY.get(k);
 
 /** Actions this user may perform right now on this sale (drives the UI and the queue). */
 export function availableSaleActions(sale: { status: string; created_by?: string | null; transaction_type?: string | null }, user: { id: string; role: Role }) {
+  const topUpAllowed = new Set([
+    'submit_new_sale', 'approve_new_sale', 'submit_payment_proof', 'return_to_sales',
+    'enter_invoice', 'reject_sale', 'approve_sale', 'skip_topup_documents',
+    'start_pre_allocation', 'set_allocation_date', 'confirm_allocation',
+    'log_site_activity', 'cancel_sale',
+  ]);
   return SALE_ACTIONS.filter(a =>
-  (user.role === 'SUPER_ADMIN' || a.roles.includes(user.role)) && a.from.includes(sale.status) &&
-  (sale.transaction_type !== 'TOP_UP' || a.key === 'skip_topup_documents' || a.key === 'open_ops_portal') &&
-  !(a.ownOnly && user.role === 'SALES' && sale.created_by !== user.id));
+    (user.role === 'SUPER_ADMIN' || a.roles.includes(user.role)) &&
+    a.from.includes(sale.status) &&
+    (String(sale.transaction_type ?? 'INITIAL_DEPOSIT').toUpperCase() !== 'TOP_UP' || topUpAllowed.has(a.key)) &&
+    !(a.ownOnly && user.role === 'SALES' && sale.created_by !== user.id));
 }
 
 export async function performSaleAction(actor: Actor, saleId: string, key: string, input: Record<string, unknown>) {
@@ -609,16 +616,20 @@ export async function recordSaleTopUp(actor: Actor, saleId: string, input: Recor
     { name: 'payment_amount', label: 'Top-up amount (₦)', type: 'number', required: true, min: 1 },
     { name: 'payment_reference', label: 'Payment reference', type: 'text', required: true },
     { name: 'payment_bank', label: 'Receiving bank', type: 'select', required: true, options: ['Providus', 'Titan', 'Zenith'] },
+    { name: 'payment_proof_url', label: 'Payment proof', type: 'file', required: true, uploadPurpose: 'sales_payment_evidence' },
   ], input);
   const paymentAmount = Number(p.payment_amount);
   if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) throw new WorkflowError('Top-up amount must be greater than ₦0.');
   return run(actor, async ctx => {
     const sale = await one(ctx, `select * from sales where id=$1 and status<>'CANCELLED'`, [saleId]);
     if (!sale) throw new WorkflowError('The existing sale could not be found.');
+    await assertOwnedUpload(ctx, p.payment_proof_url, 'Payment proof', 'sales_payment_evidence');
+    await assertFreshEvidence(ctx, p.payment_proof_url, 'payment proof');
     const topup = await one(ctx, `insert into sales(sale_reference, transaction_type, parent_sale_id, client_id, lead_id, client_name, client_email, property_name, plot_reference, amount, estate_value, payment_amount, quoted_amount, payment_plan, description, status, payment_status, payment_reference, payment_bank, created_by, beneficiary_name, beneficiary_phone, beneficiary_email, beneficiary_address, beneficiary_relationship)
-      values('TOPUP-' || to_char(now(), 'YYYYMM') || '-' || lpad(nextval('sale_reference_seq')::text, 6, '0'), 'TOP_UP', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $11, 'Top-up for ' || $12, 'DRAFT', 'UNPAID', $12, $13, $14, $15, $16, $17, $18, $19)
+      values('TOPUP-' || to_char(now(), 'YYYYMM') || '-' || lpad(nextval('sale_reference_seq')::text, 6, '0'), 'TOP_UP', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $11, 'Top-up for ' || $12, 'DRAFT', 'PROOF_SUBMITTED', $12, $13, $14, $15, $16, $17, $18, $19)
       returning id`, [sale.id, sale.client_id, sale.lead_id, sale.client_name, sale.client_email, sale.property_name, sale.plot_reference, paymentAmount, sale.estate_value, sale.payment_plan, sale.sale_reference, p.payment_reference, p.payment_bank, actor.id, sale.beneficiary_name, sale.beneficiary_phone, sale.beneficiary_email, sale.beneficiary_address, sale.beneficiary_relationship]);
     if (!topup) throw new WorkflowError('The top-up could not be linked to the existing sale.');
+    await addDoc(ctx, topup.id, 'PAYMENT_PROOF', p.payment_proof_url, 'Top-up payment proof');
     await logEvent(ctx, 'SALE', topup.id, 'SALES', 'Top-up linked to existing sale', null, 'DRAFT', `${sale.sale_reference} · ${money(paymentAmount)}`);
     await audit(ctx, 'SALE_TOPUP_CREATED', 'SALE', topup.id, { parent_sale_id: sale.id, sale_reference: sale.sale_reference, amount: paymentAmount, bank: p.payment_bank });
     return topup.id as string;
