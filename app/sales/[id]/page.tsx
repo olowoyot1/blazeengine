@@ -26,7 +26,7 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
         coalesce((select coalesce(root.estate_value, root.quoted_amount, root.amount, 0) from sales root where root.id=coalesce(sale.parent_sale_id, sale.id)), 0)
         - coalesce((select sum(coalesce(p.payment_amount, p.amount, 0)) from sales p
           where (p.id=coalesce(sale.parent_sale_id, sale.id) or p.parent_sale_id=coalesce(sale.parent_sale_id, sale.id))
-            and p.status <> 'CANCELLED' and p.payment_status='VERIFIED'), 0)
+            and p.status <> 'CANCELLED' and p.payment_status in ('VERIFIED','PROOF_SUBMITTED')), 0)
       ) as outstanding_balance
       from sales sale left join users c on c.id=sale.created_by where sale.id=${id}::uuid and sale.created_by=${s.id}::uuid`;
     const sale = ownerRows[0];
