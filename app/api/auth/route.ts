@@ -76,7 +76,10 @@ export async function POST(req: Request) {
     )`;
     if (await chargeIpAttempt(keyHash) > MAX_IP_FAILURES)
       return NextResponse.json({ error: GENERIC_FAILURE }, { status: 429, headers: { 'Retry-After': String(IP_WINDOW_MINUTES * 60) } });
-  } catch { return NextResponse.json({ error: 'Authentication service is temporarily unavailable' }, { status: 503 }); }
+  } catch (error) {
+    console.error('[auth] rate-limit/database initialization failed:', error instanceof Error ? { name: error.name, message: error.message, code: (error as Error & { code?: string }).code } : String(error));
+    return NextResponse.json({ error: 'Authentication service is temporarily unavailable' }, { status: 503 });
+  }
 
   let u: any;
   let accountOpen = false;
@@ -86,7 +89,10 @@ export async function POST(req: Request) {
       : await authSql`select * from users where lower(email)=lower(${identifier}) and active limit 1`;
     u = rows[0];
     if (u) accountOpen = await chargeAccountAttempt(u.id);
-  } catch { return NextResponse.json({ error: 'The database is not reachable. Check DATABASE_URL and try again.' }, { status: 503 }); }
+  } catch (error) {
+    console.error('[auth] user lookup/account lock failed:', error instanceof Error ? { name: error.name, message: error.message, code: (error as Error & { code?: string }).code } : String(error));
+    return NextResponse.json({ error: 'The database is not reachable. Check DATABASE_URL and try again.' }, { status: 503 });
+  }
 
   // Always run bcrypt so unknown, locked and valid accounts take the same time to answer.
   const hash = mode === 'pin' ? (u?.pin_hash ?? DUMMY_HASH) : (u?.password_hash ?? DUMMY_HASH);
