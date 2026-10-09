@@ -1,6 +1,23 @@
 import { Pool } from 'pg';
 
-const connectionString = process.env.DATABASE_URL;
+const rawConnectionString = process.env.DATABASE_URL;
+
+function normalizeDatabaseUrl(value: string | undefined) {
+  if (!value) return value;
+  try {
+    const url = new URL(value);
+    const sslMode = url.searchParams.get('sslmode');
+    if (sslMode === 'prefer' || sslMode === 'require' || sslMode === 'verify-ca') {
+      url.searchParams.set('sslmode', 'verify-full');
+    }
+    return url.toString();
+  } catch {
+    // Keep startup resilient if a test harness supplies a non-URL placeholder.
+    return value;
+  }
+}
+
+const connectionString = normalizeDatabaseUrl(rawConnectionString);
 
 type TestDatabase = {
   query?: (text: string, params?: unknown[]) => Promise<{ rows: Row[] }>;
@@ -14,7 +31,7 @@ function testDatabase() {
 
 export const pool = new Pool({
   connectionString: connectionString || 'postgres://placeholder:placeholder@localhost:5432/placeholder',
-  ssl: process.env.NODE_ENV === 'production' && connectionString ? { rejectUnauthorized: false } : false,
+  ssl: process.env.NODE_ENV === 'production' && connectionString ? { rejectUnauthorized: true } : false,
 });
 
 let schemaReady: Promise<void> | null = null;
