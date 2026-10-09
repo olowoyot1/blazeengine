@@ -34,7 +34,7 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
             <tr><td className="muted">Payment</td><td>{naira(sale.payment_amount ?? sale.amount)} · {String(sale.payment_plan || '').replace(/_/g,' ') || '—'} · {String(sale.payment_status || 'PENDING').replace(/_/g,' ')}</td></tr>
             <tr><td className="muted">Transaction</td><td>{sale.transaction_type === 'TOP_UP' ? 'Top-up' : 'Initial deposit'}</td></tr>
             <tr><td className="muted">Beneficiary</td><td>{sale.beneficiary_name || sale.client_name || '—'}{sale.beneficiary_phone ? ` · ${sale.beneficiary_phone}` : ''}</td></tr>
-            <tr><td className="muted">Created</td><td>{fmtDateTime(sale.created_at)}</td></tr>
+            <tr><td className="muted">Created</td><td>{fmtDateTime(String(sale.created_at))}</td></tr>
           </tbody></table>
         </div>
       </Shell>
