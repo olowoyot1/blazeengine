@@ -146,29 +146,27 @@ const daysFrom = (d: Date | string, n: number) => new Date(new Date(d).getTime()
 const isoDay = (d: Date) => d.toISOString().slice(0, 10);
 
 async function assertAllocationPaid(ctx: Ctx, s: Row) {
-  const currentRequired = Number(s.estate_value ?? s.quoted_amount ?? 0);
-  const currentPaid = Number(s.payment_amount ?? s.amount ?? 0);
-  if (String(s.payment_plan ?? '').toUpperCase() === 'OUTRIGHT' && currentRequired > 0 && currentPaid + 0.005 < currentRequired) {
-    throw new WorkflowError(`Allocation is blocked until the outright purchase is fully paid. Outstanding balance: ${money(currentRequired - currentPaid)}`);
-  }
-  if (!s.client_id) {
-    if (currentRequired > 0 && currentPaid + 0.005 < currentRequired) {
-      throw new WorkflowError(`Allocation is blocked until full payment is made. Outstanding balance: ${money(currentRequired - currentPaid)}`);
-    }
-    return;
-  }
-  const balance = await one(ctx, `
-    select greatest(0, coalesce(sum(case when upper(coalesce(transaction_type, '')) = 'TOP_UP'
-      then coalesce(estate_value, payment_amount, amount, 0)
-      else coalesce(estate_value, quoted_amount, amount, 0) end), 0)
-      - sum(case when payment_status = 'VERIFIED' then coalesce(payment_amount, amount, 0) else 0 end)) as outstanding
-    from sales where client_id=$1 and status <> 'CANCELLED'`, [s.client_id]);
-  const outstanding = Number(balance?.outstanding ?? 0);
+  const root = String(s.transaction_type ?? '').toUpperCase() === 'TOP_UP' && s.parent_sale_id
+    ? await one(ctx, `select * from sales where id=$1::uuid`, [s.parent_sale_id])
+    : s;
+  if (!root) throw new WorkflowError('The original sale for this transaction could not be found.');
+
+  const required = Number(root.estate_value ?? root.quoted_amount ?? root.amount ?? 0);
+  if (!(required > 0)) throw new WorkflowError('The original sale has no valid estate value.');
+
+  const paid = await one(ctx, `
+    select coalesce(sum(coalesce(payment_amount, amount, 0)),0) as paid
+    from sales
+    where status <> 'CANCELLED'
+      and (id=$1::uuid or parent_sale_id=$1::uuid)
+      and payment_status='VERIFIED'
+  `, [root.id]);
+  const verified = Number(paid?.paid ?? 0);
+  const outstanding = Math.max(0, required - verified);
   if (outstanding > 0.005) {
-    throw new WorkflowError(`Allocation is blocked until the customer's balance is fully paid. Outstanding balance: ${money(outstanding)}`);
+    throw new WorkflowError(`Allocation is blocked until the property is fully paid. Outstanding balance: ${money(outstanding)}`);
   }
 }
-
 export const SALE_CHAIN: Step[] = [
   { step: 'Sales Manager approval', role: 'SALES_MANAGER', seq: 1 },
   { step: 'Operations Manager approval', role: 'OPERATIONS_MANAGER', seq: 2 },
@@ -285,10 +283,16 @@ export const SALE_ACTIONS: SaleAction[] = [
       // require a *different* Sales Manager — one person shouldn't bless the same
       // sale twice under two different hats.
       await ctx.tx.query(`update sales set gate_approved_by=$2 where id=$1`, [s.id, ctx.actor.id]);
-      await openTask(ctx, s.id, 'SALE_DOCUMENTS');
-      const n = { title: 'Approved sale received', message: `${saleLabel(s)}. Create the Contract of Sale and Letter of Acknowledgment.`, link: saleLink(s) };
-      await notifyRoles(ctx, OPS, n);
-      await notifyUsers(ctx, [s.created_by], { ...n, title: 'Your sale was approved', message: `${saleLabel(s)} is with Operations.` });
+      if (s.transaction_type === 'TOP_UP') {
+        const n = { title: 'Approved top-up received', message: `${saleLabel(s)}. The top-up receipt is ready; continue the top-up to allocation. No contract or acknowledgement is required.`, link: saleLink(s) };
+        await notifyRoles(ctx, OPS, n);
+        await notifyUsers(ctx, [s.created_by], { ...n, title: 'Your top-up was approved', message: `${saleLabel(s)} top-up is with Operations for the next step.` });
+      } else {
+        await openTask(ctx, s.id, 'SALE_DOCUMENTS');
+        const n = { title: 'Approved sale received', message: `${saleLabel(s)}. Create the Contract of Sale and Letter of Acknowledgment.`, link: saleLink(s) };
+        await notifyRoles(ctx, OPS, n);
+        await notifyUsers(ctx, [s.created_by], { ...n, title: 'Your sale was approved', message: `${saleLabel(s)} is with Operations.` });
+      }
     },
   },
   {
@@ -653,27 +657,42 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
   return run(actor, async ctx => {
     const client = await one(ctx, `select * from clients where id=$1`, [p.client_id]);
     if (!client) throw new WorkflowError('Client not found');
-    const taken = await one(ctx,
-      `select id, sale_reference, transaction_type from sales where lower(property_name)=lower($1) and lower(plot_reference)=lower($2) and status<>'CANCELLED' limit 1`,
-      [p.property_name, p.plot_reference]);
-if (taken && p.transaction_type !== 'TOP_UP') {
-  throw new WorkflowError('This plot is already attached to another active sale (double-sale prevention). Check the estate and plot reference entered.');
-  }
-    if (p.payment_proof_url) {
+    let parentSale: Row | undefined;
+    if (p.transaction_type === 'TOP_UP') {
+      if (!p.topup_sale_id || !/^[0-9a-f-]{36}$/i.test(String(p.topup_sale_id))) {
+        throw new WorkflowError('A top-up must be linked to the existing sale. Open the existing sale and use the Top up button.');
+      }
+      parentSale = await one(ctx, 'select * from sales where id=$1::uuid for update', [p.topup_sale_id]);
+      if (!parentSale) throw new WorkflowError('The original sale for this top-up could not be found.');
+      if (parentSale.status === 'CANCELLED') throw new WorkflowError('A top-up cannot be recorded against a cancelled sale.');
+      if (String(parentSale.transaction_type ?? 'INITIAL_DEPOSIT').toUpperCase() === 'TOP_UP') throw new WorkflowError('A top-up must be linked to the original sale, not another top-up transaction.');
+      if (actor.role === 'SALES' && parentSale.created_by !== actor.id) throw new ForbiddenError('You can only record a top-up against a sale you created.');
+      if (String(parentSale.client_id) !== String(client.id)) throw new WorkflowError('The selected client does not match the original sale.');
+      const committed = await one(ctx, 'select coalesce(sum(coalesce(payment_amount, amount, 0)),0) as committed from sales where (id=$1::uuid or parent_sale_id=$1::uuid) and status <> \'CANCELLED\'', [parentSale.id]);
+      const estateValue = Number(parentSale.estate_value ?? parentSale.quoted_amount ?? parentSale.amount ?? 0);
+      const committedAmount = Number(committed?.committed ?? 0);
+      if (!(estateValue > 0)) throw new WorkflowError('The original sale has no valid estate value.');
+      if (committedAmount + paymentAmount > estateValue + 0.005) throw new WorkflowError(`This top-up exceeds the remaining balance of ${money(Math.max(0, estateValue - committedAmount))} on the original sale.`);
+    } else {
+      const taken = await one(ctx, 'select id, sale_reference, transaction_type from sales where lower(property_name)=lower($1) and lower(plot_reference)=lower($2) and status<>\'CANCELLED\' and coalesce(transaction_type,\'INITIAL_DEPOSIT\')<>\'TOP_UP\' limit 1', [p.property_name, p.plot_reference]);
+      if (taken) throw new WorkflowError('This plot is already attached to another active sale (double-sale prevention). Check the estate and plot reference entered.');
+    }    if (p.payment_proof_url) {
       await assertOwnedUpload(ctx, p.payment_proof_url, 'Payment evidence', 'sales_payment_evidence');
       await assertFreshEvidence(ctx, p.payment_proof_url, 'payment evidence');
     }
-  const beneficiaryName = p.beneficiary_name ?? client.name;
-  const beneficiaryPhone = p.beneficiary_phone ?? client.phone;
+  const baseSale = parentSale;
+  const propertyName = baseSale?.property_name ?? p.property_name;
+  const plotReference = baseSale?.plot_reference ?? p.plot_reference;
+  const estateValueForRow = baseSale?.estate_value ?? p.estate_value;
+  const paymentPlanForRow = baseSale?.payment_plan ?? p.payment_plan;
+  const beneficiaryName = baseSale?.beneficiary_name ?? p.beneficiary_name ?? client.name;
+  const beneficiaryPhone = baseSale?.beneficiary_phone ?? p.beneficiary_phone ?? client.phone;
   if (!beneficiaryName || !beneficiaryPhone) throw new WorkflowError('Beneficiary full name and phone are required');
   const paymentStatus = p.payment_proof_url ? 'PROOF_SUBMITTED' : 'UNPAID';
+  const salePrefix = p.transaction_type === 'TOP_UP' ? 'TOPUP-' : 'SALE-';
   const s = (await one(ctx,
-`insert into sales(sale_reference,transaction_type,client_id,lead_id,client_name,client_email,property_name,plot_reference,amount,estate_value,payment_amount,quoted_amount,payment_plan,description,status,payment_status,payment_reference,payment_bank,created_by,
-    beneficiary_name,beneficiary_phone,beneficiary_email,beneficiary_address,beneficiary_relationship)
-  values('SALE-' || to_char(now(), 'YYYYMM') || '-' || lpad(nextval('sale_reference_seq')::text, 6, '0'), $1, $2,(select id from leads where client_id=$2 limit 1),$3,$4,$5,$6,$7,$8,$9,$7,$10,$11,'DRAFT',$12,$13,$14,$15,$16,$17,$18,$19) returning id, sale_reference`,
-  [p.transaction_type, client.id, client.name, client.email, p.property_name, p.plot_reference, p.estate_value, p.estate_value, p.payment_amount, p.payment_plan, p.description, paymentStatus, p.payment_reference ?? null, p.payment_bank ?? null, actor.id,
-    beneficiaryName, beneficiaryPhone, p.beneficiary_email ?? null, p.beneficiary_address ?? null, p.beneficiary_relationship ?? 'Self']))!;
-    if (p.payment_proof_url) {
+    'insert into sales(sale_reference,transaction_type,parent_sale_id,client_id,lead_id,client_name,client_email,property_name,plot_reference,amount,estate_value,payment_amount,quoted_amount,payment_plan,description,status,payment_status,payment_reference,payment_bank,created_by,beneficiary_name,beneficiary_phone,beneficiary_email,beneficiary_address,beneficiary_relationship) values($1 || to_char(now(), \'YYYYMM\') || \'-\' || lpad(nextval(\'sale_reference_seq\')::text, 6, \'0\'), $2, $3, $4,(select id from leads where client_id=$4 limit 1),$5,$6,$7,$8,$9,$10,$11,$10,$12,$13,\'DRAFT\',$14,$15,$16,$17,$18,$19,$20,$21,$22) returning id, sale_reference',
+    [salePrefix, p.transaction_type, baseSale?.id ?? null, client.id, client.name, client.email, propertyName, plotReference, p.payment_amount, estateValueForRow, p.payment_amount, paymentPlanForRow, p.description, paymentStatus, p.payment_reference ?? null, p.payment_bank ?? null, actor.id, beneficiaryName, beneficiaryPhone, baseSale?.beneficiary_email ?? p.beneficiary_email ?? null, baseSale?.beneficiary_address ?? p.beneficiary_address ?? null, baseSale?.beneficiary_relationship ?? p.beneficiary_relationship ?? 'Self']))!;  if (p.payment_proof_url) {
       const m = String(p.payment_proof_url).match(/^\/api\/files\/([0-9a-f-]{36})$/i)!;
       await ctx.tx.query(`insert into sale_documents(sale_id,document_type,document_name,document_url,uploaded_file_id,uploaded_by) values($1,'PAYMENT_PROOF','Payment evidence',$2,$3::uuid,$4)`, [s.id, p.payment_proof_url, m[1], actor.id]);
     }

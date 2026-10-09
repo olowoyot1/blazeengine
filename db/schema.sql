@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS sales(
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   sale_reference text,
   transaction_type text NOT NULL DEFAULT 'INITIAL_DEPOSIT',
+  parent_sale_id uuid REFERENCES sales(id),
   client_id uuid REFERENCES clients(id),
   lead_id uuid REFERENCES leads(id),
   client_name text NOT NULL,
@@ -121,8 +122,8 @@ CREATE TABLE IF NOT EXISTS sales(
 );
 
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS sale_reference text;
-  ALTER TABLE sales ADD COLUMN IF NOT EXISTS transaction_type text NOT NULL DEFAULT 'INITIAL_DEPOSIT';
-  ALTER TABLE sales ADD COLUMN IF NOT EXISTS parent_sale_id uuid REFERENCES sales(id);
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS transaction_type text NOT NULL DEFAULT 'INITIAL_DEPOSIT';
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS parent_sale_id uuid REFERENCES sales(id) ON DELETE SET NULL;
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS beneficiary_name text;
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS beneficiary_phone text;
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS beneficiary_email text;
@@ -251,6 +252,7 @@ CREATE INDEX IF NOT EXISTS idx_sales_status ON sales(status);
 DROP INDEX IF EXISTS uq_sales_live_plot;
   CREATE UNIQUE INDEX IF NOT EXISTS uq_sales_live_plot ON sales(lower(property_name), lower(plot_reference)) WHERE status <> 'CANCELLED' AND coalesce(transaction_type, 'INITIAL_DEPOSIT') <> 'TOP_UP' AND property_name IS NOT NULL AND plot_reference IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_sales_creator ON sales(created_by);
+CREATE INDEX IF NOT EXISTS idx_sales_parent_sale ON sales(parent_sale_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_docs_sale ON sale_documents(sale_id);
 CREATE INDEX IF NOT EXISTS idx_ops_sale ON operations(sale_id, status);
 CREATE INDEX IF NOT EXISTS idx_expenses_status ON expenses(status);

@@ -6,7 +6,7 @@ import { topUpSale } from '@/lib/actions';
 
 const BANKS = ['Providus', 'Titan', 'Zenith'] as const;
 
-export function TopUpButton({ sale }: { sale: { id: string; client_id?: string; property_name?: string; plot_reference?: string; estate_value?: number; payment_plan?: string; beneficiary_name?: string; beneficiary_phone?: string } }) {
+export function TopUpButton({ sale }: { sale: { id: string; client_id?: string; property_name?: string; plot_reference?: string; estate_value?: number; payment_plan?: string; beneficiary_name?: string; beneficiary_phone?: string; transaction_type?: string } }) {
   const [open, setOpen] = useState(false);
   const [amount, setAmount] = useState('');
   const [bank, setBank] = useState('');
@@ -29,6 +29,7 @@ export function TopUpButton({ sale }: { sale: { id: string; client_id?: string; 
     });
   }
 
+  if (String(sale.transaction_type ?? 'INITIAL_DEPOSIT').toUpperCase() === 'TOP_UP') return null;
   if (!open) return <button type="button" className="btn light" onClick={() => setOpen(true)}>Top up</button>;
   return <form onSubmit={submit} className="topup-form" aria-label="Record top-up">
     {error && <div className="alert">{error}</div>}
