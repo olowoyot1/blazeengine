@@ -38,7 +38,7 @@ export default async function Sales({ searchParams }: { searchParams: Promise<{ 
               <td>{naira(r.amount)}</td><td>{naira(r.outstanding_balance ?? 0)}</td><td><Badge status={r.status} /></td>
               <td><Badge status={r.payment_status} label={(r.payment_status || 'PENDING').replace(/_/g, ' ')} /></td>
               <td>{r.allocation_date ? fmtDate(r.allocation_date) : 'Not scheduled'}</td>
-              <td><div style={{ display: 'flex', gap: 6, alignItems: 'center' }}><TopUpButton sale={r} /><Link className="btn light" href={`/sales/${r.id}`}>Open</Link></div></td>
+              <td><div style={{ display: 'flex', gap: 6, alignItems: 'center' }}><TopUpButton sale={{ ...r, transaction_type: r.transaction_type }} /><Link className="btn light" href={`/sales/${r.id}`}>Open</Link></div></td>
             </tr>
           ))}</tbody>
         </table></div>
