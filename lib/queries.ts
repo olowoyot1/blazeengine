@@ -33,7 +33,14 @@ export async function getSale(u: U, id: string) {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
   const sc = saleScope(u);
   const rows = await sql`
-    select s.*, c.name creator from sales s left join users c on c.id=s.created_by
+    select s.*, c.name creator,
+      greatest(0,
+        coalesce((select coalesce(root.estate_value, root.quoted_amount, root.amount, 0) from sales root where root.id=coalesce(s.parent_sale_id, s.id)), 0)
+        - coalesce((select sum(coalesce(p.payment_amount, p.amount, 0)) from sales p
+          where (p.id=coalesce(s.parent_sale_id, s.id) or p.parent_sale_id=coalesce(s.parent_sale_id, s.id))
+            and p.status <> 'CANCELLED' and p.payment_status='VERIFIED'), 0)
+      ) as outstanding_balance
+    from sales s left join users c on c.id=s.created_by
     where s.id=${id}::uuid and (${sc.all}::boolean or (${sc.own}::boolean and s.created_by=${sc.uid}::uuid) or s.status = any(${sc.statuses}::text[]))`;
   const sale = rows[0];
   if (!sale) return null;
