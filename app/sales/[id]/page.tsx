@@ -12,6 +12,7 @@ import { SALE_STATUS_LABEL } from '@/lib/constants';
 import { SaleActionPanel } from './SaleActionPanel';
 import { EditSaleForm } from './EditSaleForm';
 import { DeleteTransaction } from '@/components/DeleteTransaction';
+import { TopUpButton } from '../TopUpButton';
 
 const MAIN_LINE = ['PENDING_SALES_APPROVAL', 'DRAFT', 'PAYMENT_PROOF_SUBMITTED', 'INVOICE_ENTERED', 'SALES_APPROVED', 'CONTRACT_PREPARED', 'ACCOUNT_DOCS_SENT', 'SITE_NOTIFIED', 'OPS_DOCS_UPLOADED', 'IN_APPROVAL', 'FULLY_APPROVED', 'PRE_ALLOCATION', 'ALLOCATION_SCHEDULED', 'ALLOCATED'];
 
@@ -26,7 +27,7 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
     return (
       <Shell s={s} title={`${sale.client_name} — ${sale.plot_reference || sale.property_name || ''}`} kicker="Sale">
         <div className="card">
-          <div className="section-title"><h3>Sale Information</h3><div style={{display:'flex',gap:8,alignItems:'center'}}><span className="badge">{sale.sale_reference || 'Reference pending'}</span><Badge status={sale.status} label={SALE_STATUS_LABEL[sale.status] ?? sale.status} /></div></div>
+          <div className="section-title"><h3>Sale Information</h3><div style={{display:'flex',gap:8,alignItems:'center'}}><TopUpButton sale={sale as any} /><span className="badge">{sale.sale_reference || 'Reference pending'}</span><Badge status={sale.status} label={SALE_STATUS_LABEL[sale.status] ?? sale.status} /></div></div>
           <table className="table"><tbody>
             <tr><td className="muted">Client</td><td>{sale.client_name || '—'}{sale.client_email ? ` (${sale.client_email})` : ''}</td></tr>
             <tr><td className="muted">Property / Plot</td><td>{sale.property_name || '—'} / {sale.plot_reference || '—'}</td></tr>
@@ -71,7 +72,7 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
 
       <div className="grid2">
         <div className="card">
-          <div className="section-title"><h3>Overview</h3><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span className="badge">{sale.sale_reference || 'Reference pending'}</span><Badge status={sale.status} label={SALE_STATUS_LABEL[sale.status] ?? sale.status} /></div></div>
+          <div className="section-title"><h3>Overview</h3><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><TopUpButton sale={sale as any} /><span className="badge">{sale.sale_reference || 'Reference pending'}</span><Badge status={sale.status} label={SALE_STATUS_LABEL[sale.status] ?? sale.status} /></div></div>
           <table className="table"><tbody>
             <tr><td className="muted">Client</td><td>{sale.client_name} {sale.client_email ? `(${sale.client_email})` : ''}</td></tr>
             <tr><td className="muted">Property beneficiary</td><td>{sale.beneficiary_name ? <><b>{sale.beneficiary_name}</b>{sale.beneficiary_relationship ? ` (${sale.beneficiary_relationship})` : ''}{sale.beneficiary_phone ? ` · ${sale.beneficiary_phone}` : ''}{sale.beneficiary_email ? ` · ${sale.beneficiary_email}` : ''}</> : <span className="muted">Not set — documents default to the client</span>}</td></tr>
