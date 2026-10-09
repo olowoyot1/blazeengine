@@ -27,8 +27,8 @@ async function chargeIpAttempt(keyHash: string): Promise<number> {
   const rows = await authSql`insert into auth_rate_limits(key_hash,window_started_at,failures,updated_at)
     values(${keyHash},now(),1,now())
     on conflict(key_hash) do update set
-      failures=case when now()-auth_rate_limits.window_started_at >= (${IP_WINDOW_MINUTES} || ' minutes')::interval then 1 else auth_rate_limits.failures+1 end,
-      window_started_at=case when now()-auth_rate_limits.window_started_at >= (${IP_WINDOW_MINUTES} || ' minutes')::interval then now() else auth_rate_limits.window_started_at end,
+      failures=case when now()-auth_rate_limits.window_started_at >= (${IP_WINDOW_MINUTES} * interval '1 minute') then 1 else auth_rate_limits.failures+1 end,
+      window_started_at=case when now()-auth_rate_limits.window_started_at >= (${IP_WINDOW_MINUTES} * interval '1 minute') then now() else auth_rate_limits.window_started_at end,
       updated_at=now()
     returning failures`;
   return Number(rows[0]?.failures ?? 0);
@@ -45,7 +45,7 @@ async function chargeAccountAttempt(userId: string): Promise<boolean> {
       failed_attempts = case when locked_until is not null and locked_until <= now() then 1 else failed_attempts + 1 end,
       locked_until = case
         when (case when locked_until is not null and locked_until <= now() then 1 else failed_attempts + 1 end) >= ${MAX_ATTEMPTS}
-          then now() + (${LOCK_MINUTES} || ' minutes')::interval
+          then now() + (${LOCK_MINUTES} * interval '1 minute')
         else null end
     where id=${userId} and (locked_until is null or locked_until <= now())
     returning id`;
