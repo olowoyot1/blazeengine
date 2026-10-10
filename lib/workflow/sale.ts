@@ -180,18 +180,6 @@ const reason: Field = { name: 'reason', label: 'Reason', type: 'textarea', requi
 
 export const SALE_ACTIONS: SaleAction[] = [
   {
-    key: 'submit_new_sale', label: 'Send for Sales Manager approval', ownOnly: true,
-    help: 'Submit this saved draft to a Sales Manager for review. You can continue editing before sending it for approval.',
-    roles: ['SALES', 'SALES_MANAGER'], from: ['DRAFT'], to: 'PENDING_SALES_APPROVAL',
-    fields: [],
-    async apply(ctx, s) {
-      const n = { title: 'New sale awaiting approval', message: `${saleLabel(s)} was submitted to a Sales Manager for approval.`, link: saleLink(s) };
-      await notifyRoles(ctx, SALE_APPROVERS, n);
-      await notifyUsers(ctx, [s.created_by], { ...n, title: 'Sale sent for approval', message: `${saleLabel(s)} is awaiting Sales Manager approval.` });
-      return 'Sale submitted for Sales Manager approval';
-    },
-  },
-  {
     key: 'approve_new_sale', label: 'Approve new sale',
     help: 'Sales Manager or Operations Manager reviews the submitted sale. Payment processing cannot start until this approval is completed.',
     // Sales organizers can approve submitted sales, but the self-approval guard in
@@ -547,7 +535,7 @@ export const getSaleAction = (k: string) => BY_KEY.get(k);
 /** Actions this user may perform right now on this sale (drives the UI and the queue). */
 export function availableSaleActions(sale: { status: string; created_by?: string | null; transaction_type?: string | null }, user: { id: string; role: Role }) {
   const topUpAllowed = new Set([
-    'submit_new_sale', 'approve_new_sale', 'submit_payment_proof', 'return_to_sales',
+    'approve_new_sale', 'submit_payment_proof', 'return_to_sales',
     'enter_invoice', 'reject_sale', 'approve_sale', 'skip_topup_documents',
     'start_pre_allocation', 'set_allocation_date', 'confirm_allocation',
     'log_site_activity', 'cancel_sale',
@@ -598,12 +586,12 @@ export async function updateSale(actor: Actor, saleId: string, input: Record<str
   return run(actor, async ctx => {
     const sale = await one(ctx, `select * from sales where id=$1 for update`, [saleId]);
     if (!sale) throw new WorkflowError('Sale not found');
-    const canEditDraft = sale.status === 'DRAFT' && isSalesExecutive && sale.created_by === actor.id;
+    const canEditDraft = false; // DRAFT means "approved for payment proof" — locked after manager approval
     const canEditSubmitted = sale.status === 'PENDING_SALES_APPROVAL' && isPrivilegedEditor;
     if (!canEditDraft && !canEditSubmitted) {
       throw new WorkflowError(canEditDraft || canEditSubmitted
         ? 'This sale cannot be edited in its current stage'
-        : 'Sales executives can only edit their own saved drafts; submitted sales are locked');
+        : 'Submitted sales are locked for sales executives; only an approver can edit a sale awaiting approval');
     }
     const taken = await one(ctx, `select id from sales where lower(property_name)=lower($1) and lower(plot_reference)=lower($2) and id<>$3 and status<>'CANCELLED' limit 1`, [p.property_name, p.plot_reference, saleId]);
     if (taken) throw new WorkflowError('This plot is already attached to another active sale');
@@ -756,7 +744,7 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
       $1 || to_char(now(), 'YYYYMM') || '-' || lpad(nextval('sale_reference_seq')::text, 6, '0'), $2, $3, $4, (select id from leads where client_id=$4 limit 1),
       $5, $6, $7, $8,
       $9, $10, $11, $12, $13,
-      $14, 'DRAFT', $15, $16, $17,
+      $14, 'PENDING_SALES_APPROVAL', $15, $16, $17,
       $18, $19, $20, $21, $22, $23
     )
     returning id, sale_reference`,
@@ -789,9 +777,10 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
       const m = String(p.payment_proof_url).match(/^\/api\/files\/([0-9a-f-]{36})$/i)!;
       await ctx.tx.query(`insert into sale_documents(sale_id,document_type,document_name,document_url,uploaded_file_id,uploaded_by) values($1,'PAYMENT_PROOF','Payment evidence',$2,$3::uuid,$4)`, [s.id, p.payment_proof_url, m[1], actor.id]);
     }
-  await logEvent(ctx, 'SALE', s.id, 'SALES', 'Sale saved as draft', null, 'DRAFT', `${p.property_name} / ${p.plot_reference} · estate ${money(p.estate_value)} · payment ${money(p.payment_amount)} (${p.payment_plan})${p.payment_proof_url ? ' · payment evidence attached' : ''}`);
-  await audit(ctx, 'SALE_CREATED', 'SALE', s.id, { client: client.name, status: 'DRAFT', payment_evidence_attached: !!p.payment_proof_url });
-  await notifyUsers(ctx, [actor.id], { title: 'Sale saved as draft', message: `${client.name} — ${p.property_name} / ${p.plot_reference} is saved as a draft. Submit it for Sales Manager approval when ready.`, link: saleLink(s.id) });
+  await logEvent(ctx, 'SALE', s.id, 'SALES', 'Sale created — awaiting Sales Manager approval', null, 'PENDING_SALES_APPROVAL', `${p.property_name} / ${p.plot_reference} · estate ${money(p.estate_value)} · payment ${money(p.payment_amount)} (${p.payment_plan})${p.payment_proof_url ? ' · payment evidence attached' : ''}`);
+  await audit(ctx, 'SALE_CREATED', 'SALE', s.id, { client: client.name, status: 'PENDING_SALES_APPROVAL', payment_evidence_attached: !!p.payment_proof_url });
+  await notifyRoles(ctx, SALE_APPROVERS, { title: 'New sale awaiting approval', message: `${client.name} — ${p.property_name} / ${p.plot_reference} was submitted for Sales Manager approval.`, link: saleLink(s.id) });
+  await notifyUsers(ctx, [actor.id], { title: 'Sale sent for approval', message: `${client.name} — ${p.property_name} / ${p.plot_reference} is awaiting Sales Manager approval.`, link: saleLink(s.id) });
     return s.id as string;
   });
 }

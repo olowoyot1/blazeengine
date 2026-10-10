@@ -236,7 +236,7 @@ CREATE INDEX IF NOT EXISTS idx_sale_next_actions_owner ON sale_next_actions(owne
 CREATE INDEX IF NOT EXISTS idx_sale_next_actions_due ON sale_next_actions(due_date, source_status);
 
 CREATE OR REPLACE FUNCTION sync_sale_transaction_document_numbers()
-RETURNS trigger LANGUAGE plpgsql AS $
+RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE v_type text;
 BEGIN
   IF NEW.invoice_number IS NULL OR NEW.invoice_number = '' THEN
@@ -263,7 +263,7 @@ BEGIN
   NEW.transaction_document_type := v_type;
   RETURN NEW;
 END;
-$;
+$$;
 
 DROP TRIGGER IF EXISTS trg_sync_sale_transaction_document_numbers ON sales;
 CREATE TRIGGER trg_sync_sale_transaction_document_numbers
@@ -271,7 +271,7 @@ BEFORE INSERT OR UPDATE OF invoice_number, sales_receipt_no, sales_order_no, sal
 ON sales FOR EACH ROW EXECUTE FUNCTION sync_sale_transaction_document_numbers();
 
 CREATE OR REPLACE FUNCTION refresh_sale_next_action(p_sale_id uuid)
-RETURNS void LANGUAGE plpgsql AS $
+RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
   s record; a record;
   v_key text; v_title text; v_role text; v_due date;
@@ -347,24 +347,24 @@ BEGIN
     END IF;
   END IF;
 END;
-$;
+$$;
 
 CREATE OR REPLACE FUNCTION trg_sales_next_action()
-RETURNS trigger LANGUAGE plpgsql AS $
+RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN PERFORM refresh_sale_next_action(NEW.id); RETURN NEW; END;
-$;
+$$;
 DROP TRIGGER IF EXISTS trg_sales_next_action ON sales;
 CREATE TRIGGER trg_sales_next_action
 AFTER INSERT OR UPDATE OF status,approved_at,allocation_date ON sales
 FOR EACH ROW EXECUTE FUNCTION trg_sales_next_action();
 
 CREATE OR REPLACE FUNCTION trg_approval_next_action()
-RETURNS trigger LANGUAGE plpgsql AS $
+RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW.entity_type='SALE' THEN PERFORM refresh_sale_next_action(NEW.entity_id); END IF;
   RETURN NEW;
 END;
-$;
+$$;
 DROP TRIGGER IF EXISTS trg_approval_next_action ON approvals;
 CREATE TRIGGER trg_approval_next_action
 AFTER INSERT OR UPDATE OF status,approver_user_id,acted_at ON approvals
@@ -377,9 +377,9 @@ UPDATE sales SET transaction_document_type = CASE
   ELSE transaction_document_type END
 WHERE invoice_number IS NOT NULL;
 
-DO $ DECLARE r record; BEGIN
+DO $$ DECLARE r record; BEGIN
   FOR r IN SELECT id FROM sales LOOP PERFORM refresh_sale_next_action(r.id); END LOOP;
-END $;
+END $$;
 
 
     `).then(() => undefined).catch((error) => {
@@ -411,7 +411,7 @@ export async function authSql(strings: TemplateStringsArray, ...values: unknown[
   const params: unknown[] = [];
   for (let i = 0; i < values.length; i += 1) {
     params.push(values[i]);
-    text += `${params.length}${strings[i + 1]}`;
+    text += `$${params.length}${strings[i + 1]}`;
   }
   const result = await pool.query(text, params);
   return result.rows;
