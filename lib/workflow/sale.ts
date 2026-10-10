@@ -105,21 +105,33 @@ function describeDocs(n: AccountDocNumbers) {
 
 /** Generates the PDFs for the transaction nature and files them on the sale. */
 async function attachAccountDocuments(ctx: Ctx, s: Row, numbers: AccountDocNumbers, paid: number, reissued = false) {
-  const estateValue = Number(s.estate_value ?? s.quoted_amount ?? 0);
-  if (!(estateValue > 0)) throw new WorkflowError('No estate value is recorded on this sale — ask Sales to set the estate value before generating account documents');
-  const client = s.client_id ? await one(ctx, `select phone, email, address from clients where id=$1`, [s.client_id]) : undefined;
+  const isTopUp = String(s.transaction_type ?? '').toUpperCase() === 'TOP_UP';
+  const parent = isTopUp && s.parent_sale_id
+    ? await one(ctx, `select * from sales where id=$1`, [s.parent_sale_id])
+    : s;
+  if (!parent) throw new WorkflowError('The top-up parent sale could not be found.');
+  const estateValue = Number(parent.estate_value ?? parent.quoted_amount ?? parent.amount ?? 0);
+  if (!(estateValue > 0)) throw new WorkflowError('No estate value is recorded on the linked sale — ask Sales to set the estate value before generating account documents');
+  const paymentTotals = await one(ctx, `
+    select coalesce(sum(coalesce(payment_amount, amount, 0)), 0) as total_paid,
+      coalesce(sum(case when id <> $1 and payment_status='VERIFIED' then coalesce(payment_amount, amount, 0) else 0 end), 0) as prior_paid
+    from sales where (id=$1 or parent_sale_id=$1) and status <> 'CANCELLED' and payment_status='VERIFIED'`, [parent.id]);
+  const totalPaid = Number(paymentTotals?.total_paid ?? paid);
+  const priorPayment = await one(ctx, `select payment_reference from sales where (id=$1 or parent_sale_id=$1) and id <> $2 and payment_status='VERIFIED' and payment_reference is not null order by created_at desc limit 1`, [parent.id, s.id]);
+  const client = parent.client_id ? await one(ctx, `select phone, email, address from clients where id=$1`, [parent.client_id]) : undefined;
   const actor = await one(ctx, `select name from users where id=$1::uuid`, [ctx.actor.id]);
   const { receiptNo } = numbers;
   const primaryNo = numbers.invoiceNo ?? numbers.salesOrderNo ?? receiptNo;
   const input: SaleDocInput = {
     invoiceNo: primaryNo, receiptNo, issuedAt: new Date(),
-    clientName: String(s.client_name ?? 'Client'),
-    clientEmail: s.client_email ?? client?.email, clientPhone: client?.phone, clientAddress: client?.address,
-    beneficiaryName: s.beneficiary_name, beneficiaryPhone: s.beneficiary_phone, beneficiaryEmail: s.beneficiary_email,
-    beneficiaryAddress: s.beneficiary_address, beneficiaryRelationship: s.beneficiary_relationship,
-    propertyName: s.property_name, plotReference: s.plot_reference, saleReference: s.sale_reference,
-    transactionType: s.transaction_type, paymentPlan: s.payment_plan, paymentReference: s.payment_reference,
-    estateValue, amountPaid: paid, issuedBy: String(actor?.name ?? 'Accounts'),
+    clientName: String(parent.client_name ?? 'Client'),
+    clientEmail: parent.client_email ?? client?.email, clientPhone: client?.phone, clientAddress: client?.address,
+    beneficiaryName: parent.beneficiary_name, beneficiaryPhone: parent.beneficiary_phone, beneficiaryEmail: parent.beneficiary_email,
+    beneficiaryAddress: parent.beneficiary_address, beneficiaryRelationship: parent.beneficiary_relationship,
+    propertyName: parent.property_name, plotReference: parent.plot_reference, saleReference: parent.sale_reference,
+    transactionType: isTopUp ? 'TOP_UP linked to sale' : s.transaction_type, paymentPlan: parent.payment_plan,
+    paymentReference: s.payment_reference, previousPaymentReference: priorPayment?.payment_reference ?? null,
+    estateValue, amountPaid: paid, totalPaidToDate: totalPaid, issuedBy: String(actor?.name ?? 'Accounts'),
   };
   const suffix = reissued ? ` (reissued to ${s.beneficiary_name})` : '';
   if (numbers.invoiceNo) {

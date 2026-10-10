@@ -19,8 +19,10 @@ export type SaleDocInput = {
   transactionType?: string | null;
   paymentPlan?: string | null;
   paymentReference?: string | null;
+  previousPaymentReference?: string | null;
   estateValue: number;
   amountPaid: number;
+  totalPaidToDate?: number;
   issuedBy: string;
 };
 
@@ -212,7 +214,7 @@ export async function buildReceiptPdf(d: SaleDocInput): Promise<Uint8Array> {
   const top = y;
   const leftEnd = party(page, f, 'ISSUED IN FAVOUR OF (PROPERTY BENEFICIARY)', d, y, 'Payment received from');
   const rightEnd = details(page, f, [
-    ['Invoice', d.invoiceNo], ['Sale reference', d.saleReference], ['Payment reference', d.paymentReference],
+    ['Invoice', d.invoiceNo], ['Sale reference', d.saleReference], ['Previous payment reference', d.previousPaymentReference], ['Payment reference', d.paymentReference],
   ], top);
   y = Math.min(leftEnd, rightEnd) - 36;
 
@@ -221,11 +223,13 @@ export async function buildReceiptPdf(d: SaleDocInput): Promise<Uint8Array> {
   text(page, ngn(d.amountPaid), M + 20, y - 44, f.bold, 26, BRAND);
   y -= 100;
 
-  const balance = Math.max(d.estateValue - d.amountPaid, 0);
+  const totalPaid = d.totalPaidToDate ?? d.amountPaid;
+  const balance = Math.max(d.estateValue - totalPaid, 0);
   const rows: [string, string][] = [
     ['Being payment for', propertyLabel(d)],
     ['Estate value', ngn(d.estateValue)],
-    ['Amount paid', ngn(d.amountPaid)],
+    ['This payment', ngn(d.amountPaid)],
+    ['Total paid to date', ngn(totalPaid)],
     ['Balance outstanding', ngn(balance)],
   ];
   for (const [k, v] of rows) {
