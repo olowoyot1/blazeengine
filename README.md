@@ -76,7 +76,7 @@ RECEIPT_ISSUED`.
 
 ## Architecture
 
-- **Next.js 15 App Router**, deployed as a normal Vercel serverless app.
+- **Next.js 16 App Router** (Node 24.x), deployed as a normal Vercel serverless app.
 - **Neon serverless Postgres.** Reads go over Neon's stateless HTTP driver;
   every state-changing action runs in a real transaction over a short-lived
   pooled WebSocket connection (`lib/db.ts`), so a partial failure can never
@@ -150,6 +150,10 @@ npm run dev
 npm test
 npm run typecheck
 ```
+
+> **Note:** `tests/workflow.test.ts` predates the current automatic invoice / sale-documents
+> flow, so part of that suite fails until it is updated to the current state machine.
+> `npm run typecheck` and `npm run build` pass.
 
 ## Deploy
 
