@@ -78,7 +78,7 @@ export function NewSaleForm({ clients, initialClientId }: { clients: { id: strin
           </div>}
         </div>
       </div>
-      <button className="btn primary" disabled={pending}>{pending ? 'Saving draft…' : 'Save sale as draft'}</button>
+      <button className="btn primary" disabled={pending}>{pending ? 'Submitting…' : 'Submit sale for approval'}</button>
     </form>
   );
 }

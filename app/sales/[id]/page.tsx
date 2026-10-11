@@ -26,7 +26,7 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
         coalesce((select coalesce(root.estate_value, root.quoted_amount, root.amount, 0) from sales root where root.id=coalesce(sale.parent_sale_id, sale.id)), 0)
         - coalesce((select sum(coalesce(p.payment_amount, p.amount, 0)) from sales p
           where (p.id=coalesce(sale.parent_sale_id, sale.id) or p.parent_sale_id=coalesce(sale.parent_sale_id, sale.id))
-            and p.status <> 'CANCELLED' and p.payment_status='VERIFIED'), 0)
+            and p.status <> 'CANCELLED' and p.payment_status in ('VERIFIED','PROOF_SUBMITTED')), 0)
       ) as outstanding_balance
       from sales sale left join users c on c.id=sale.created_by where sale.id=${id}::uuid and sale.created_by=${s.id}::uuid`;
     const sale = ownerRows[0];
@@ -103,13 +103,10 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
         </div>
       </div>
 
-      {((sale.status === 'DRAFT' && String(s.role) === 'SALES' && sale.created_by === s.id) ||
-        (sale.status === 'PENDING_SALES_APPROVAL' && (s.role === 'SALES_MANAGER' || String(s.role) === 'OPERATIONS_MANAGER' || s.role === 'SUPER_ADMIN'))) && (
+      {(sale.status === 'PENDING_SALES_APPROVAL' && (s.role === 'SALES_MANAGER' || String(s.role) === 'OPERATIONS_MANAGER' || s.role === 'SUPER_ADMIN')) && (
         <div className="card" style={{ marginTop: 15 }}>
-          <h3>{sale.status === 'DRAFT' ? 'Edit saved draft' : 'Edit sale before approval'}</h3>
-          <p className="muted small">{sale.status === 'DRAFT'
-            ? 'Correct any mistakes before sending this sale to the Sales Manager. Once submitted, the sale is locked for sales executives.'
-            : 'Adjust the commercial details if needed, then review the updated overview and approve the sale.'}</p>
+          <h3>Edit sale before approval</h3>
+          <p className="muted small">Adjust the commercial details if needed, then review the updated overview and approve the sale.</p>
           <EditSaleForm sale={sale as any} />
         </div>
       )}
@@ -143,7 +140,7 @@ export default async function SaleDetail({ params }: { params: Promise<{ id: str
           <h3 style={{ marginTop: 18 }}>Operations tasks</h3>
           {tasks.length === 0 ? <div className="muted small">None.</div> : (
             <ul className="timeline">{tasks.map((t: any) => (
-              <li key={t.id}><b>{human(t.task_type)}</b> <Badge status={t.status} /> <span className="muted small">{t.due_date ? `due ${t.due_date}` : ''}</span></li>
+              <li key={t.id}><b>{human(t.task_type)}</b> <Badge status={t.status} /> <span className="muted small">{t.due_date ? `due ${fmtDate(t.due_date)}` : ''}</span></li>
             ))}</ul>
           )}
         </div>

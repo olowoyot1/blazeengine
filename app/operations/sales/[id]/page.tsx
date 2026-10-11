@@ -79,7 +79,7 @@ export default async function OperationsSaleDetail({ params }: { params: Promise
           <h3>Operations tasks</h3>
           {tasks.length === 0 ? <div className="empty">No operations tasks.</div> : (
             <ul className="timeline">{tasks.map((t: any) => (
-              <li key={t.id}><b>{human(t.task_type)}</b> <Badge status={t.status} /> <span className="muted small">{t.due_date ? `due ${t.due_date}` : ''}</span></li>
+              <li key={t.id}><b>{human(t.task_type)}</b> <Badge status={t.status} /> <span className="muted small">{t.due_date ? `due ${fmtDate(t.due_date)}` : ''}</span></li>
             ))}</ul>
           )}
         </div>

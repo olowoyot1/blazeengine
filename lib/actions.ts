@@ -1,6 +1,7 @@
 'use server';
 import { revalidatePath } from 'next/cache';
 import bcrypt from 'bcryptjs';
+import { randomBytes } from 'node:crypto';
 import { requireUser, requireCap } from './guard';
 import { can } from './rbac';
 import { sql, withTx } from './db';
@@ -338,7 +339,8 @@ export async function resetUserPassword(userId: string, reason: string): Promise
     const target = await sql`select name, email, role, session_version from users where id=${userId}::uuid`;
     if (!target[0]) return { error: 'User not found' };
     requireAuthorityOver(admin, target[0].role as Role);
-    const temp = Math.random().toString(36).slice(2, 6) + Math.random().toString(36).slice(2, 6) + '9Aa';
+    // Math.random() is predictable; temporary credentials must come from a CSPRNG.
+    const temp = randomBytes(9).toString('base64url') + '9Aa';
     const hash = await bcrypt.hash(temp, 12);
     const newVersion = Number(target[0].session_version ?? 0) + 1;
     // Bumping session_version here kills any session the target already has open —

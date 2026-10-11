@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { query, withTx } from '@/lib/db';
 import { performSaleAction as runSaleAction } from '@/lib/workflow/sale';
 import { generateSaleDocuments } from '@/lib/workflow/saleDocumentGeneration';
@@ -16,7 +17,10 @@ async function getActor(email: string): Promise<Actor | null> {
 function check(req: NextRequest) {
   const expected = process.env.LBL_PORTAL_INTEGRATION_SECRET;
   const supplied = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
-  return Boolean(expected && supplied && supplied === expected);
+  if (!expected || !supplied) return false;
+  const a = createHash('sha256').update(supplied).digest();
+  const b = createHash('sha256').update(expected).digest();
+  return timingSafeEqual(a, b);
 }
 
 async function sendDocumentsToClient(sale: any, docs: any[]) {
