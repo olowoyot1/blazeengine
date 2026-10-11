@@ -729,7 +729,8 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
     } else {
       const taken = await one(ctx, 'select id, sale_reference, transaction_type from sales where lower(property_name)=lower($1) and lower(plot_reference)=lower($2) and status<>\'CANCELLED\' and coalesce(transaction_type,\'INITIAL_DEPOSIT\')<>\'TOP_UP\' limit 1', [p.property_name, p.plot_reference]);
       if (taken) throw new WorkflowError('This plot is already attached to another active sale (double-sale prevention). Check the estate and plot reference entered.');
-    }    if (p.payment_proof_url) {
+    }
+    if (p.payment_proof_url) {
       await assertOwnedUpload(ctx, p.payment_proof_url, 'Payment evidence', 'sales_payment_evidence');
       await assertFreshEvidence(ctx, p.payment_proof_url, 'payment evidence');
     }
@@ -743,7 +744,7 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
   if (!beneficiaryName || !beneficiaryPhone) throw new WorkflowError('Beneficiary full name and phone are required');
   const paymentStatus = p.payment_proof_url ? 'PROOF_SUBMITTED' : 'UNPAID';
   const salePrefix = p.transaction_type === 'TOP_UP' ? 'TOPUP-' : 'SALE-';
-  const s = (await one(ctx,
+  const s = await one(ctx,
   `insert into sales(
     sale_reference, transaction_type, parent_sale_id, client_id, lead_id,
     client_name, client_email, property_name, plot_reference,
@@ -765,10 +766,13 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
     beneficiaryName, beneficiaryPhone, baseSale?.beneficiary_email ?? p.beneficiary_email ?? null,
     baseSale?.beneficiary_address ?? p.beneficiary_address ?? null,
     baseSale?.beneficiary_relationship ?? p.beneficiary_relationship ?? 'Self'
-  ]))!;
-      const m = String(p.payment_proof_url).match(/^\/api\/files\/([0-9a-f-]{36})$/i)!;
-      await ctx.tx.query(`insert into sale_documents(sale_id,document_type,document_name,document_url,uploaded_file_id,uploaded_by) values($1,'PAYMENT_PROOF','Payment evidence',$2,$3::uuid,$4)`, [s.id, p.payment_proof_url, m[1], actor.id]);
-    }
+  ]);
+      if (!s) throw new WorkflowError('Sale could not be created.');
+      if (p.payment_proof_url) {
+        const m = String(p.payment_proof_url).match(/^\/api\/files\/([0-9a-f-]{36})$/i);
+        if (!m) throw new WorkflowError('Payment evidence has an invalid format.');
+        await ctx.tx.query(`insert into sale_documents(sale_id,document_type,document_name,document_url,uploaded_file_id,uploaded_by) values($1,'PAYMENT_PROOF','Payment evidence',$2,$3::uuid,$4)`, [s.id, p.payment_proof_url, m[1], actor.id]);
+      }
   await logEvent(ctx, 'SALE', s.id, 'SALES', 'Sale created — awaiting Sales Manager approval', null, 'PENDING_SALES_APPROVAL', `${p.property_name} / ${p.plot_reference} · estate ${money(p.estate_value)} · payment ${money(p.payment_amount)} (${p.payment_plan})${p.payment_proof_url ? ' · payment evidence attached' : ''}`);
   await audit(ctx, 'SALE_CREATED', 'SALE', s.id, { client: client.name, status: 'PENDING_SALES_APPROVAL', payment_evidence_attached: !!p.payment_proof_url });
   await notifyRoles(ctx, SALE_APPROVERS, { title: 'New sale awaiting approval', message: `${client.name} — ${p.property_name} / ${p.plot_reference} was submitted for Sales Manager approval.`, link: saleLink(s.id) });
