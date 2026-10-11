@@ -113,11 +113,11 @@ async function attachAccountDocuments(ctx: Ctx, s: Row, numbers: AccountDocNumbe
   const estateValue = Number(parent.estate_value ?? parent.quoted_amount ?? parent.amount ?? 0);
   if (!(estateValue > 0)) throw new WorkflowError('No estate value is recorded on the linked sale — ask Sales to set the estate value before generating account documents');
   const paymentTotals = await one(ctx, `
-    select coalesce(sum(coalesce(payment_amount, amount, 0)), 0) as total_paid,
-      coalesce(sum(case when id <> $1 and payment_status='VERIFIED' then coalesce(payment_amount, amount, 0) else 0 end), 0) as prior_paid
-    from sales where (id=$1 or parent_sale_id=$1) and status <> 'CANCELLED' and payment_status='VERIFIED'`, [parent.id]);
+    select coalesce(sum(case when id=$2 then $3::numeric else coalesce(payment_amount, amount, 0) end), 0) as total_paid
+    from sales where (id=$1 or parent_sale_id=$1) and status <> 'CANCELLED' and (payment_status='VERIFIED' or id=$2)`, [parent.id, s.id, paid]);
   const totalPaid = Number(paymentTotals?.total_paid ?? paid);
-  const priorPayment = await one(ctx, `select payment_reference from sales where (id=$1 or parent_sale_id=$1) and id <> $2 and payment_status='VERIFIED' and payment_reference is not null order by created_at desc limit 1`, [parent.id, s.id]);
+  const priorPayment = await one(ctx, `select string_agg(payment_reference, ', ' order by created_at desc) as payment_references
+    from sales where (id=$1 or parent_sale_id=$1) and id <> $2 and payment_status='VERIFIED' and payment_reference is not null`, [parent.id, s.id]);
   const client = parent.client_id ? await one(ctx, `select phone, email, address from clients where id=$1`, [parent.client_id]) : undefined;
   const actor = await one(ctx, `select name from users where id=$1::uuid`, [ctx.actor.id]);
   const { receiptNo } = numbers;
@@ -130,7 +130,7 @@ async function attachAccountDocuments(ctx: Ctx, s: Row, numbers: AccountDocNumbe
     beneficiaryAddress: parent.beneficiary_address, beneficiaryRelationship: parent.beneficiary_relationship,
     propertyName: parent.property_name, plotReference: parent.plot_reference, saleReference: parent.sale_reference,
     transactionType: isTopUp ? 'TOP_UP linked to sale' : s.transaction_type, paymentPlan: parent.payment_plan,
-    paymentReference: s.payment_reference, previousPaymentReference: priorPayment?.payment_reference ?? null,
+    paymentReference: s.payment_reference, previousPaymentReference: priorPayment?.payment_references ?? null,
     estateValue, amountPaid: paid, totalPaidToDate: totalPaid, issuedBy: String(actor?.name ?? 'Accounts'),
   };
   const suffix = reissued ? ` (reissued to ${s.beneficiary_name})` : '';
