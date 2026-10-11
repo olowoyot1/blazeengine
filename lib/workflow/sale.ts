@@ -105,21 +105,33 @@ function describeDocs(n: AccountDocNumbers) {
 
 /** Generates the PDFs for the transaction nature and files them on the sale. */
 async function attachAccountDocuments(ctx: Ctx, s: Row, numbers: AccountDocNumbers, paid: number, reissued = false) {
-  const estateValue = Number(s.estate_value ?? s.quoted_amount ?? 0);
-  if (!(estateValue > 0)) throw new WorkflowError('No estate value is recorded on this sale — ask Sales to set the estate value before generating account documents');
-  const client = s.client_id ? await one(ctx, `select phone, email, address from clients where id=$1`, [s.client_id]) : undefined;
+  const isTopUp = String(s.transaction_type ?? '').toUpperCase() === 'TOP_UP';
+  const parent = isTopUp && s.parent_sale_id
+    ? await one(ctx, `select * from sales where id=$1`, [s.parent_sale_id])
+    : s;
+  if (!parent) throw new WorkflowError('The top-up parent sale could not be found.');
+  const estateValue = Number(parent.estate_value ?? parent.quoted_amount ?? parent.amount ?? 0);
+  if (!(estateValue > 0)) throw new WorkflowError('No estate value is recorded on the linked sale — ask Sales to set the estate value before generating account documents');
+  const paymentTotals = await one(ctx, `
+    select coalesce(sum(case when id=$2 then $3::numeric else coalesce(payment_amount, amount, 0) end), 0) as total_paid
+    from sales where (id=$1 or parent_sale_id=$1) and status <> 'CANCELLED' and (payment_status='VERIFIED' or id=$2)`, [parent.id, s.id, paid]);
+  const totalPaid = Number(paymentTotals?.total_paid ?? paid);
+  const priorPayment = await one(ctx, `select string_agg(payment_reference, ', ' order by created_at desc) as payment_references
+    from sales where (id=$1 or parent_sale_id=$1) and id <> $2 and payment_status='VERIFIED' and payment_reference is not null`, [parent.id, s.id]);
+  const client = parent.client_id ? await one(ctx, `select phone, email, address from clients where id=$1`, [parent.client_id]) : undefined;
   const actor = await one(ctx, `select name from users where id=$1::uuid`, [ctx.actor.id]);
   const { receiptNo } = numbers;
   const primaryNo = numbers.invoiceNo ?? numbers.salesOrderNo ?? receiptNo;
   const input: SaleDocInput = {
     invoiceNo: primaryNo, receiptNo, issuedAt: new Date(),
-    clientName: String(s.client_name ?? 'Client'),
-    clientEmail: s.client_email ?? client?.email, clientPhone: client?.phone, clientAddress: client?.address,
-    beneficiaryName: s.beneficiary_name, beneficiaryPhone: s.beneficiary_phone, beneficiaryEmail: s.beneficiary_email,
-    beneficiaryAddress: s.beneficiary_address, beneficiaryRelationship: s.beneficiary_relationship,
-    propertyName: s.property_name, plotReference: s.plot_reference, saleReference: s.sale_reference,
-    transactionType: s.transaction_type, paymentPlan: s.payment_plan, paymentReference: s.payment_reference,
-    estateValue, amountPaid: paid, issuedBy: String(actor?.name ?? 'Accounts'),
+    clientName: String(parent.client_name ?? 'Client'),
+    clientEmail: parent.client_email ?? client?.email, clientPhone: client?.phone, clientAddress: client?.address,
+    beneficiaryName: parent.beneficiary_name, beneficiaryPhone: parent.beneficiary_phone, beneficiaryEmail: parent.beneficiary_email,
+    beneficiaryAddress: parent.beneficiary_address, beneficiaryRelationship: parent.beneficiary_relationship,
+    propertyName: parent.property_name, plotReference: parent.plot_reference, saleReference: parent.sale_reference,
+    transactionType: isTopUp ? 'TOP_UP linked to sale' : s.transaction_type, paymentPlan: parent.payment_plan,
+    paymentReference: s.payment_reference, previousPaymentReference: priorPayment?.payment_references ?? null,
+    estateValue, amountPaid: paid, totalPaidToDate: totalPaid, issuedBy: String(actor?.name ?? 'Accounts'),
   };
   const suffix = reissued ? ` (reissued to ${s.beneficiary_name})` : '';
   if (numbers.invoiceNo) {
@@ -732,48 +744,28 @@ export async function createSale(actor: Actor, input: Record<string, unknown>) {
   const paymentStatus = p.payment_proof_url ? 'PROOF_SUBMITTED' : 'UNPAID';
   const salePrefix = p.transaction_type === 'TOP_UP' ? 'TOPUP-' : 'SALE-';
   const s = (await one(ctx,
-    `insert into sales(
-      sale_reference, transaction_type, parent_sale_id, client_id, lead_id,
-      client_name, client_email, property_name, plot_reference,
-      amount, estate_value, payment_amount, quoted_amount, payment_plan,
-      description, status, payment_status, payment_reference, payment_bank,
-      created_by, beneficiary_name, beneficiary_phone, beneficiary_email,
-      beneficiary_address, beneficiary_relationship
-    )
-    values(
-      $1 || to_char(now(), 'YYYYMM') || '-' || lpad(nextval('sale_reference_seq')::text, 6, '0'), $2, $3, $4, (select id from leads where client_id=$4 limit 1),
-      $5, $6, $7, $8,
-      $9, $10, $11, $12, $13,
-      $14, 'PENDING_SALES_APPROVAL', $15, $16, $17,
-      $18, $19, $20, $21, $22, $23
-    )
-    returning id, sale_reference`,
-    [
-      salePrefix,
-      p.transaction_type,
-      baseSale?.id ?? null,
-      client.id,
-      client.name,
-      client.email,
-      propertyName,
-      plotReference,
-      p.payment_amount,
-      estateValueForRow,
-      p.payment_amount,
-      estateValueForRow,
-      paymentPlanForRow,
-      p.description,
-      paymentStatus,
-      p.payment_reference ?? null,
-      p.payment_bank ?? null,
-      actor.id,
-      beneficiaryName,
-      beneficiaryPhone,
-      baseSale?.beneficiary_email ?? p.beneficiary_email ?? null,
-      baseSale?.beneficiary_address ?? p.beneficiary_address ?? null,
-      baseSale?.beneficiary_relationship ?? p.beneficiary_relationship ?? 'Self'
-    ]
-  ))!;  if (p.payment_proof_url) {
+  `insert into sales(
+    sale_reference, transaction_type, parent_sale_id, client_id, lead_id,
+    client_name, client_email, property_name, plot_reference,
+    amount, estate_value, payment_amount, quoted_amount, payment_plan,
+    description, status, payment_status, payment_reference, payment_bank,
+    created_by, beneficiary_name, beneficiary_phone, beneficiary_email,
+    beneficiary_address, beneficiary_relationship
+  ) values(
+    $1 || to_char(now(), 'YYYYMM') || '-' || lpad(nextval('sale_reference_seq')::text, 6, '0'), $2, $3, $4,
+    (select id from leads where client_id=$4 limit 1), $5, $6, $7, $8,
+    $9, $10, $11, $12, $13, $14, 'PENDING_SALES_APPROVAL', $15, $16, $17,
+    $18, $19, $20, $21, $22, $23
+  ) returning id, sale_reference`, [
+    salePrefix, String(p.transaction_type), baseSale?.id ?? null, client.id,
+    client.name, client.email, propertyName, plotReference,
+    paymentAmount, Number(estateValueForRow), paymentAmount, paymentAmount,
+    String(paymentPlanForRow), p.description ?? null, paymentStatus,
+    p.payment_reference ?? null, p.payment_bank ?? null, actor.id,
+    beneficiaryName, beneficiaryPhone, baseSale?.beneficiary_email ?? p.beneficiary_email ?? null,
+    baseSale?.beneficiary_address ?? p.beneficiary_address ?? null,
+    baseSale?.beneficiary_relationship ?? p.beneficiary_relationship ?? 'Self'
+  ]))!;
       const m = String(p.payment_proof_url).match(/^\/api\/files\/([0-9a-f-]{36})$/i)!;
       await ctx.tx.query(`insert into sale_documents(sale_id,document_type,document_name,document_url,uploaded_file_id,uploaded_by) values($1,'PAYMENT_PROOF','Payment evidence',$2,$3::uuid,$4)`, [s.id, p.payment_proof_url, m[1], actor.id]);
     }
