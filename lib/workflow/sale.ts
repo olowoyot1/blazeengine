@@ -341,27 +341,13 @@ export const SALE_ACTIONS: SaleAction[] = [
   },
   {
     key: 'create_contract', label: 'Create sale documents',
-    help: 'Operations prepares the Contract of Sale and Letter of Acknowledgment. On submission the sale goes back to Accounts.',
+    help: 'Operations triggers automatic generation of the Contract of Sale and Letter of Acknowledgment. No files are uploaded manually.',
     roles: OPS, from: ['SALES_APPROVED'], to: 'CONTRACT_PREPARED',
-    fields: [
-      { name: 'contract_url', label: 'Contract of Sale', type: 'file', required: true },
-      { name: 'acknowledgment_url', label: 'Letter of Acknowledgment', type: 'file', required: true },
-    ],
-    async apply(ctx, s, i) {
+    fields: [],
+    async apply(ctx, s) {
       if (s.transaction_type === 'TOP_UP') throw new WorkflowError('Top-up transactions do not receive sale documents');
-      await addDoc(ctx, s.id, 'CONTRACT', i.contract_url, 'Contract of Sale');
-      await addDoc(ctx, s.id, 'ACKNOWLEDGMENT_LETTER', i.acknowledgment_url, 'Letter of Acknowledgment');
-      await closeTasks(ctx, s.id, 'SALE_DOCUMENTS');
-      const originator = await one(ctx, `select id, role from users where id=$1 and active=true`, [s.created_by]);
-      if (!originator) throw new WorkflowError('The sales originator is no longer active and cannot approve these documents');
-      const originatorRole: Role = originator.role === 'SALES_MANAGER' ? 'SALES_MANAGER' : 'SALES';
-      const steps: Step[] = [
-        { step: 'Sales originator approval', role: originatorRole, seq: 1, userId: s.created_by },
-        { step: 'Sales Manager approval', role: 'SALES_MANAGER', seq: 2, userId: undefined },
-      ];
-      await openRound(ctx, 'SALE', s.id, 'SALE_DOCUMENTS_APPROVAL', Number(s.chain_round || 0) + 1, steps);
-      await notifyUsers(ctx, [s.created_by], { title: 'Operations documents ready for your approval', message: `${saleLabel(s)} — review the Contract of Sale and Letter of Acknowledgment.`, link: saleLink(s) });
-      await notifyRoles(ctx, ['SALES_MANAGER'], { title: 'Operations documents awaiting approval', message: `${saleLabel(s)} — review the three documents submitted by Operations.`, link: saleLink(s) });
+      const { generateSaleDocuments } = await import('./saleDocumentGeneration');
+      await generateSaleDocuments(ctx.actor, s.id);
     },
   },
   {
