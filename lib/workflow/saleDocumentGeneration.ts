@@ -5,7 +5,7 @@ import { openRound, registerRound, type Step } from './approvals';
 
 type SaleRow = Record<string, any>;
 
-const GENERATORS: Role[] = ['SALES', 'SALES_MANAGER', 'ACCOUNTANT', 'FINANCE_OPERATIONS', 'OPERATIONS', 'OPERATIONS_MANAGER'];
+const GENERATORS = new Set<Role>(['SALES', 'SALES_MANAGER', 'ACCOUNTANT', 'FINANCE_OPERATIONS', 'OPERATIONS', 'OPERATIONS_MANAGER']);
 const SALE_DOCUMENTS_ROUND = 'SALE_DOCUMENTS_APPROVAL';
 
 const saleLabel = (s: SaleRow) => `${s.client_name} — ${s.plot_reference || s.property_name || 'sale'}`;
@@ -57,8 +57,8 @@ registerRound(SALE_DOCUMENTS_ROUND, {
 });
 
 export async function generateSaleDocuments(actor: Actor, saleId: string) {
-  if (actor.role !== 'SUPER_ADMIN' && !GENERATORS.includes(actor.role)) {
-    throw new ForbiddenError('Only Sales and Accounts users can generate the Contract of Sale and Letter of Acknowledgement');
+  if (actor.role !== 'SUPER_ADMIN' && !GENERATORS.has(actor.role)) {
+    throw new ForbiddenError('Only Sales, Accounts, and Operations users can generate the Contract of Sale and Letter of Acknowledgement');
   }
 
   return run(actor, async ctx => {
