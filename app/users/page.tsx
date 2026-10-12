@@ -28,7 +28,7 @@ export default async function Users() {
       </div>
       <div className="card" style={{ marginTop: 15 }}>
         <div className="table-wrap"><table className="table">
-          <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Department</th><th>Status</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Username</th><th>Email</th><th>Role</th><th>Department</th><th>Status</th><th></th></tr></thead>
           <tbody>{rows.map((r: any) => <UserRow key={r.id} r={r} isSelf={r.id === s.id} assignableRoles={assignableRoles} canManageAdmins={canManageAdmins} />)}</tbody>
         </table></div>
       </div>
