@@ -5,7 +5,7 @@ import { query } from '@/lib/db';
 import { generateSaleDocuments } from '@/lib/workflow/saleDocumentGeneration';
 import { ForbiddenError, WorkflowError } from '@/lib/workflow/core';
 
-const PREVIEW_ROLES = new Set(['SUPER_ADMIN', 'SALES', 'SALES_MANAGER', 'ACCOUNTANT', 'FINANCE_OPERATIONS']);
+const PREVIEW_ROLES = new Set(['SUPER_ADMIN', 'SALES', 'SALES_MANAGER', 'ACCOUNTANT', 'FINANCE_OPERATIONS', 'OPERATIONS', 'OPERATIONS_MANAGER']);
 
 export async function generateSaleDocumentsAction(saleId: string) {
   const actor = await requireUser();

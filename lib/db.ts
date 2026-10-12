@@ -306,7 +306,7 @@ BEGIN
         WHEN 'DRAFT' THEN v_key := 'UPLOAD_PAYMENT_PROOF'; v_title := 'Upload payment proof'; v_role := 'SALES';
         WHEN 'PAYMENT_PROOF_SUBMITTED' THEN v_key := 'VERIFY_PAYMENT_GENERATE_DOCUMENT'; v_title := 'Verify payment and generate invoice / sales order'; v_role := 'ACCOUNTANT';
         WHEN 'INVOICE_ENTERED' THEN v_key := 'VERIFY_FINANCE_DOCUMENT'; v_title := 'Verify generated finance document'; v_role := 'SALES_MANAGER';
-        WHEN 'SALES_APPROVED' THEN v_key := 'GENERATE_SALE_DOCUMENTS'; v_title := 'Generate Contract + Letter of Acknowledgement'; v_role := 'ACCOUNTANT';
+        WHEN 'SALES_APPROVED' THEN v_key := 'GENERATE_SALE_DOCUMENTS'; v_title := 'Generate Contract + Letter of Acknowledgement'; v_role := 'OPERATIONS';
         WHEN 'CONTRACT_PREPARED' THEN v_key := 'APPROVE_SALE_DOCUMENTS'; v_title := 'Review and approve generated sale documents'; v_role := 'SALES_MANAGER';
         WHEN 'ACCOUNT_DOCS_SENT' THEN v_key := 'OPEN_OPERATIONS_PORTAL'; v_title := 'Open Operations portal and start site workflow'; v_role := 'OPERATIONS_MANAGER';
         WHEN 'SITE_NOTIFIED' THEN v_key := 'COMPLETE_SITE_DOCUMENTS'; v_title := 'Complete deed of assignment and survey requirements'; v_role := 'OPERATIONS';

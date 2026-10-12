@@ -3,7 +3,7 @@
 import { useEffect, useState, useTransition } from 'react';
 import { generateSaleDocumentsAction, getSaleDocumentPreviewAction } from '@/lib/saleDocumentActions';
 
-const ALLOWED = new Set(['SALES', 'SALES_MANAGER', 'ACCOUNTANT', 'FINANCE_OPERATIONS', 'SUPER_ADMIN']);
+const ALLOWED = new Set(['SALES', 'SALES_MANAGER', 'ACCOUNTANT', 'FINANCE_OPERATIONS', 'OPERATIONS', 'OPERATIONS_MANAGER', 'SUPER_ADMIN']);
 type Doc = { document_type: string; document_name?: string | null; document_url: string };
 
 export function GenerateSaleDocumentsButton({ saleId, status, role, compact = false }: { saleId: string; status: string; role: string; compact?: boolean }) {
