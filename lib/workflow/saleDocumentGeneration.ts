@@ -5,7 +5,7 @@ import { openRound, registerRound, type Step } from './approvals';
 
 type SaleRow = Record<string, any>;
 
-const GENERATORS: Role[] = ['SALES', 'SALES_MANAGER', 'ACCOUNTANT', 'FINANCE_OPERATIONS'];
+const GENERATORS: Role[] = ['SALES', 'SALES_MANAGER', 'ACCOUNTANT', 'FINANCE_OPERATIONS', 'OPERATIONS', 'OPERATIONS_MANAGER'];
 const SALE_DOCUMENTS_ROUND = 'SALE_DOCUMENTS_APPROVAL';
 
 const saleLabel = (s: SaleRow) => `${s.client_name} — ${s.plot_reference || s.property_name || 'sale'}`;
