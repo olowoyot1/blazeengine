@@ -9,11 +9,12 @@ import Link from 'next/link';
 
 export default async function Accounts() {
   const s = await requireCap('accounts.workspace');
-  const [proof, invoiced, approvedForDocuments, contracted, negApproved, expEntered] = await Promise.all([
+  const [proof, invoiced, approvedForDocuments, contracted, accountDocsSent, negApproved, expEntered] = await Promise.all([
     listSales(s, { status: 'PAYMENT_PROOF_SUBMITTED' }),
     listSales(s, { statuses: ['INVOICE_ENTERED'] }),
     listSales(s, { status: 'SALES_APPROVED' }),
     listSales(s, { status: 'CONTRACT_PREPARED' }),
+    listSales(s, { status: 'ACCOUNT_DOCS_SENT' }),
     listExpenses(s, ['NEGOTIATION_APPROVED']),
     listExpenses(s, ['PAID']),
   ]);
@@ -55,6 +56,16 @@ export default async function Accounts() {
         <div className="section-title"><h3>Zoho Books</h3><a className="btn" href="https://landblaze.oaatz.com" target="_blank" rel="noreferrer">Post</a></div>
         <p className="muted small">Post approved accounting records to Zoho Books through the Landblaze portal.</p>
       </div>
+      <div className="card" style={{ marginTop: 15 }}>
+        <div className="section-title"><h3>Account documents sent → Post to portal</h3><span className="badge">{accountDocsSent.length}</span></div>
+        <p className="muted small">Keep the portal action available after sending documents so Accounts can post the completed transaction to the Landblaze portal.</p>
+        {accountDocsSent.length === 0 ? <div className="empty">Nothing waiting.</div> : (
+          <div className="table-wrap"><table className="table"><thead><tr><th>Client</th><th>Reference</th><th>Status</th><th></th></tr></thead><tbody>
+            {accountDocsSent.map((sale: any) => <tr key={sale.id}><td>{sale.client_name}</td><td>{sale.sale_reference || '—'}</td><td><Badge status={sale.status} /></td><td style={{ display: 'flex', gap: 8 }}><a className="btn" href="https://landblaze.oaatz.com" target="_blank" rel="noreferrer">Post to portal</a><Link className="btn light" href={`/sales/${sale.id}`}>Open</Link></td></tr>)}
+          </tbody></table></div>
+        )}
+      </div>
+
       <div className="grid2" style={{ marginTop: 15 }}>
         <WorkQueue title="Contract ready → send sales documents" sales={contracted} emptyLabel="Nothing waiting." />
         <div className="card">
