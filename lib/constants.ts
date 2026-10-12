@@ -26,6 +26,7 @@ export const SALE_STATUS_LABEL: Record<string, string> = {
   PENDING_SALES_APPROVAL: 'Pending manager approval',
   DRAFT: 'Approved for payment proof',
   PAYMENT_PROOF_SUBMITTED: 'Payment proof submitted',
+  PAYMENT_VERIFIED: 'Payment verified · awaiting Sales Manager handoff',
   INVOICE_ENTERED: 'Invoice generated · awaiting Sales approval',
   SALES_APPROVED: 'Approved sale · awaiting Operations documents',
   CONTRACT_PREPARED: 'Contract + Acknowledgement ready · awaiting account documents',
@@ -42,7 +43,7 @@ export const SALE_STATUS_LABEL: Record<string, string> = {
   CANCELLED: 'Cancelled',
 };
 export const SALE_STATUS_ORDER = [
-  'PENDING_SALES_APPROVAL', 'DRAFT', 'PAYMENT_PROOF_SUBMITTED', 'INVOICE_ENTERED', 'SALES_APPROVED', 'CONTRACT_PREPARED',
+  'PENDING_SALES_APPROVAL', 'DRAFT', 'PAYMENT_PROOF_SUBMITTED', 'PAYMENT_VERIFIED', 'INVOICE_ENTERED', 'SALES_APPROVED', 'CONTRACT_PREPARED',
   'ACCOUNT_DOCS_SENT', 'SITE_NOTIFIED', 'OPS_DEED_UPLOADED', 'OPS_DOCS_UPLOADED', 'IN_APPROVAL', 'RETURNED',
   'FULLY_APPROVED', 'PRE_ALLOCATION', 'ALLOCATION_SCHEDULED', 'ALLOCATED', 'CANCELLED',
 ];
