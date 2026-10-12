@@ -15,7 +15,7 @@ export async function getClientSales(clientId: string): Promise<ClientSaleRow[]>
       u.name creator,
       le.created_at last_activity_at,
       le.action last_activity_action,
-      le.message last_activity_message,
+      le.notes last_activity_message,
       pa.step pending_approval_step,
       pa.approver_role pending_approval_role,
       pa.created_at pending_approval_at,
@@ -34,7 +34,7 @@ export async function getClientSales(clientId: string): Promise<ClientSaleRow[]>
     left join sale_next_actions na on na.sale_id=s.id
     left join users nu on nu.id=na.owner_user_id
     left join lateral (
-      select e.created_at, e.action, e.message
+      select e.created_at, e.action, e.notes
       from workflow_events e
       where e.entity_type='SALE' and e.entity_id=s.id
       order by e.created_at desc
