@@ -7,6 +7,7 @@ const PROFILE_IMAGE_TYPES = new Set(['image/png', 'image/jpeg']);
 const PURPOSES = new Set([
   'document', 'payment_proof', 'bank_payment_proof', 'receipt', 'contract',
   'deed', 'survey', 'supporting_document', 'profile', 'payroll',
+  'expense_source_document', 'finance_payment_advice',
   'sales_payment_evidence',
 ]);
 const MAX_BYTES = 4 * 1024 * 1024;
