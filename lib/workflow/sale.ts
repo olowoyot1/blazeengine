@@ -239,9 +239,37 @@ export const SALE_ACTIONS: SaleAction[] = [
     },
   },
   {
+    key: 'confirm_payment', label: 'Confirm payment proof',
+    help: 'Accounts verifies the uploaded payment proof. Once confirmed, the sale is returned to the Sales Manager for the next approval step.',
+    roles: ['ACCOUNTANT', 'FINANCE_OPERATIONS'], from: ['PAYMENT_PROOF_SUBMITTED'], to: 'PAYMENT_VERIFIED',
+    fields: [{ name: 'note', label: 'Verification note (optional)', type: 'textarea' }],
+    async apply(ctx, s, i) {
+      const paid = Number(s.payment_amount ?? 0);
+      if (!(paid > 0)) throw new WorkflowError('No payment amount is recorded on this sale.');
+      await ctx.tx.query(`update sales set payment_status='VERIFIED', invoice_variance_reason=null where id=$1`, [s.id]);
+      const n = { title: 'Payment confirmed — Sales Manager action required', message: `${saleLabel(s)} payment proof was confirmed by Accounts. Sales Manager should now send it to Operations for document generation.${i.note ? ` ${i.note}` : ''}`, link: saleLink(s) };
+      await notifyRoles(ctx, ['SALES_MANAGER'], n);
+      await notifyUsers(ctx, [s.created_by], n);
+      return 'Payment proof confirmed';
+    },
+  },
+  {
+    key: 'send_to_operations', label: 'Send to Operations for documents',
+    help: 'Sales Manager confirms the Accounts payment verification and sends the sale to Operations to generate the Contract of Sale and Letter of Acknowledgment.',
+    roles: ['SALES_MANAGER'], from: ['PAYMENT_VERIFIED'], to: 'SALES_APPROVED',
+    fields: [{ name: 'note', label: 'Note to Operations (optional)', type: 'textarea' }],
+    async apply(ctx, s, i) {
+      await openTask(ctx, s.id, 'SALE_DOCUMENTS');
+      const n = { title: 'Payment verified — Operations document generation required', message: `${saleLabel(s)} has been confirmed by Accounts. Generate the Contract of Sale and Letter of Acknowledgment.${i.note ? ` ${i.note}` : ''}`, link: saleLink(s) };
+      await notifyRoles(ctx, OPS, n);
+      await notifyUsers(ctx, [s.created_by], { ...n, title: 'Sale sent to Operations' });
+      return 'Sent to Operations';
+    },
+  },
+  {
     key: 'enter_invoice', label: 'Generate account documents',
-    help: 'Verify the payment, then generate the account documents for this transaction. Outright purchases get an invoice and sales receipt, installment purchases get a sales order and sales receipt, and top-ups get a sales receipt only. Numbers and PDFs are generated automatically. The sale is then sent back to Sales for approval.',
-    roles: ['ACCOUNTANT', 'FINANCE_OPERATIONS'], from: ['PAYMENT_PROOF_SUBMITTED', 'DRAFT'], to: 'INVOICE_ENTERED',
+    help: 'Generate the account documents after payment verification. Outright purchases get an invoice and sales receipt, installment purchases get a sales order and sales receipt, and top-ups get a sales receipt only. Numbers and PDFs are generated automatically. The sale is then sent back to Sales for approval.',
+    roles: ['ACCOUNTANT', 'FINANCE_OPERATIONS'], from: ['PAYMENT_VERIFIED', 'DRAFT'], to: 'INVOICE_ENTERED',
     fields: [
       { name: 'note', label: 'Note to Sales (optional)', type: 'textarea' },
     ],
