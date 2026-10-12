@@ -2,14 +2,15 @@ import Link from 'next/link';
 import { headers } from 'next/headers';
 import type { Session } from '@/lib/auth';
 import { NAV_GROUPS, canAny } from '@/lib/rbac';
-import { unreadCount } from '@/lib/queries';
+import { unreadCount, approvalQueueCount } from '@/lib/queries';
 import { ROLE_META } from '@/lib/constants';
 
 export default async function Shell({children,title,kicker,s,actions}:{children:React.ReactNode;title:string;kicker?:string;s:Session;actions?:React.ReactNode}){
   const path=(await headers()).get('x-invoke-path')||'';
   let unread = 0;
+  let approvalCount = 0;
   try {
-    unread = await unreadCount(s.id);
+    [unread, approvalCount] = await Promise.all([unreadCount(s.id), approvalQueueCount(s)]);
   } catch (error) {
     console.error('[shell] notification count unavailable:', error);
   }
@@ -22,7 +23,7 @@ export default async function Shell({children,title,kicker,s,actions}:{children:
       <p className="muted small">Engine v3</p>
       <nav className="nav">
         {general?.items.filter(n=>canAny(s.role,n.cap)).map(n=><Link href={n.href} key={n.href} className={path.startsWith(n.href)?'active':''}>
-          <span>{n.label}</span>{n.href==='/notifications'&&unread>0&&<span className="pill">{unread}</span>}
+          <span>{n.label}</span>{n.href==='/notifications'&&unread>0&&<span className="pill">{unread}</span>}{n.href==='/approvals'&&approvalCount>0&&<span className="pill">{approvalCount}</span>}
         </Link>)}
 
         {departments.map(g=>{
@@ -33,7 +34,7 @@ export default async function Shell({children,title,kicker,s,actions}:{children:
             <summary><span>{g.label}</span><span className="nav-chevron">›</span></summary>
             <div className="nav-subnav">
               {items.map(n=><Link href={n.href} key={n.href} className={path.startsWith(n.href)?'active':''}>
-                <span>{n.label}</span>{n.href==='/notifications'&&unread>0&&<span className="pill">{unread}</span>}
+                <span>{n.label}</span>{n.href==='/notifications'&&unread>0&&<span className="pill">{unread}</span>}{n.href==='/approvals'&&approvalCount>0&&<span className="pill">{approvalCount}</span>}
               </Link>)}
             </div>
           </details>

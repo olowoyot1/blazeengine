@@ -1,17 +1,27 @@
 import Shell from '@/components/Shell';
 import { requireCap } from '@/lib/guard';
-import { actionableApprovals, pendingOverview } from '@/lib/queries';
+import { actionableApprovals, myQueue, pendingOverview } from '@/lib/queries';
 import { naira, fmtDateTime } from '@/lib/format';
 import { can } from '@/lib/rbac';
 import { ApprovalRow } from './ApprovalRow';
 
 export default async function Approvals() {
   const s = await requireCap('approvals.read');
-  const [mine, overview] = await Promise.all([actionableApprovals(s), can(s.role, 'audit.read') ? pendingOverview() : Promise.resolve([])]);
+  const [mine, queue, overview] = await Promise.all([actionableApprovals(s), myQueue(s), can(s.role, 'audit.read') ? pendingOverview() : Promise.resolve([])]);
   return (
     <Shell s={s} title="Approval Centre" kicker="Sales Manager → Operations Manager → HR (internal audit) → CEO"><div style={{display:"flex",gap:6}}><a className="btn" href="/api/export?type=approvals&format=xls">Excel</a><a className="btn" href="/api/export?type=approvals&format=pdf">PDF</a></div>
       <div className="card">
-        <div className="section-title"><h3>Waiting for your decision</h3><span className="badge">{mine.length}</span></div>
+        <div className="section-title"><h3>All action required from you</h3><span className="badge">{queue.length}</span></div>
+        <p className="muted small" style={{ marginTop: 0 }}>This is your complete work queue: approvals, reviews, uploads, document preparation, and other actions assigned to your role.</p>
+        {queue.length === 0 ? <div className="empty">Nothing is waiting on you right now.</div> : (
+          <div className="table-wrap"><table className="table"><thead><tr><th>Type</th><th>Item</th><th>Action</th><th>Flag</th><th></th></tr></thead><tbody>
+            {queue.map((item: any, index: number) => <tr key={`${item.kind}-${item.href}-${index}`}><td>{item.kind}</td><td><b>{item.title}</b><div className="muted small">{item.sub}</div></td><td>{item.action}</td><td>{item.flag || '—'}</td><td><a className="btn light" href={item.href}>Open</a></td></tr>)}
+          </tbody></table></div>
+        )}
+      </div>
+
+      <div className="card" style={{ marginTop: 15 }}>
+        <div className="section-title"><h3>Waiting for your approval decision</h3><span className="badge">{mine.length}</span></div>
         <p className="muted small" style={{ marginTop: 0 }}>Each item below explains the evidence you are expected to review. Approve only when the record is complete; reject with a reason when it needs correction.</p>
         {mine.length === 0 ? <div className="empty">Nothing is waiting on you right now.</div> : (
           <div>{mine.map((a: any) => <ApprovalRow key={a.id} a={a} />)}</div>

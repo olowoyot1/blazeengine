@@ -180,6 +180,11 @@ export async function actionableApprovals(u: U) {
     order by a.created_at`;
 }
 /** Every open approval step in the company (read-only overview for oversight roles). */
+export async function approvalQueueCount(u: U) {
+  const items = await myQueue(u);
+  return items.length;
+}
+
 export async function pendingOverview() {
   return sql`
     select a.*, coalesce(s.client_name, e.vendor, 'Payroll '||p.payroll_month) subject, coalesce(s.plot_reference, e.category, p.payroll_month) detail, coalesce(s.amount,e.amount,e.negotiated_amount,p.total_net) amount,
