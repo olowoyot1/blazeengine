@@ -2,6 +2,7 @@
 import { Fragment, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { setUserRole, setUserActive, resetUserPassword } from '@/lib/actions';
+import { HRRequestForm } from './HRRequestForm';
 import { Badge } from '@/components/Badge';
 
 const CRITICAL = new Set(['CEO', 'HR', 'SALES_MANAGER', 'OPERATIONS_MANAGER', 'FINANCE_OPERATIONS', 'SITE_MANAGER', 'ACCOUNTANT', 'ADMIN', 'SUPER_ADMIN']);
@@ -56,6 +57,7 @@ export function UserRow({ r, isSelf, assignableRoles, canManageAdmins }: { r: an
       <td>{r.department || '—'}</td>
       <td>{r.active ? <Badge status="APPROVED" label="Active" /> : <Badge status="REJECTED" label="Inactive" />}{r.must_change_password && <span className="tag">Must change PW</span>}</td>
       <td style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        {isSelf && <HRRequestForm />}
         {locked ? (
           <span className="muted small">Super Administrator only</span>
         ) : (

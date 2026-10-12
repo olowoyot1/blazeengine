@@ -394,6 +394,20 @@ export async function saveClientProfile(clientId: string, input: Record<string, 
 
 
 // ---- HR ------------------------------------------------------------------
+export async function createPersonalHRRequest(input: { requestType: string; subject: string; details?: string }): Promise<Result> {
+  const s = await requireUser();
+  const allowed = ['LEAVE', 'PAYROLL', 'DOCUMENT', 'WORKPLACE', 'OTHER'];
+  if (!allowed.includes(input.requestType)) return { error: 'Choose a valid HR request type.' };
+  if (!input.subject.trim()) return { error: 'Add a subject for your request.' };
+  try {
+    const employee = await sql`select id from employees where user_id=${s.id}::uuid and employment_status <> 'EXITED' limit 1`;
+    if (!employee.length) return { error: 'Your employee profile is not linked to this user account. Ask HR to link it first.' };
+    await sql`insert into hr_requests(employee_id,request_type,subject,details,created_by) values(${employee[0].id}::uuid,${input.requestType},${input.subject.trim().slice(0,160)},${input.details?.trim().slice(0,4000) || null},${s.id}::uuid)`;
+    revalidatePath('/users'); revalidatePath('/hr'); revalidatePath('/approvals'); revalidatePath('/notifications');
+    return { ok: true };
+  } catch (e) { return toErr(e); }
+}
+
 export async function createEmployee(input: {firstName:string;lastName:string;employeeNo:string;department?:string;jobTitle?:string;phone?:string}): Promise<Result>{
   const s=await requireCap('hr.workspace');
   try { const row=await sql`insert into employees(employee_no,first_name,last_name,department,job_title,phone,created_by) values(${input.employeeNo.trim()},${input.firstName.trim()},${input.lastName.trim()},${input.department||null},${input.jobTitle||null},${input.phone||null},${s.id}::uuid) returning id`; revalidatePath('/hr'); return {ok:true,id:row[0].id}; } catch(e){return toErr(e);}
