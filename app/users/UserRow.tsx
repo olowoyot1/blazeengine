@@ -43,7 +43,7 @@ export function UserRow({ r, isSelf, assignableRoles, canManageAdmins }: { r: an
   return (
     <Fragment>
     <tr>
-      <td><div className="staff-cell">{r.avatar_file_id?<img className="staff-avatar" src={'/api/files/'+r.avatar_file_id} alt=""/>:<span className="staff-avatar placeholder">{r.name.slice(0,1).toUpperCase()}</span>}<span>{r.name}</span></div></td><td>{r.email}</td>
+      <td><div className="staff-cell">{r.avatar_file_id?<img className="staff-avatar" src={'/api/files/'+r.avatar_file_id} alt=""/>:<span className="staff-avatar placeholder">{r.name.slice(0,1).toUpperCase()}</span>}<span>{r.name}</span></div></td><td>{r.username || <span className="muted">Not set</span>}</td><td>{r.email}</td>
       <td>
         {locked ? (
           <span className="badge">{r.role.replace(/_/g, ' ')}</span>
@@ -72,7 +72,7 @@ export function UserRow({ r, isSelf, assignableRoles, canManageAdmins }: { r: an
     </tr>
     {askReason && (
       <tr>
-        <td colSpan={6} style={{ background: 'var(--bg)' }}>
+        <td colSpan={7} style={{ background: 'var(--bg)' }}>
           <div style={{ padding: '8px 0' }}>
             <label className="field">
               {askReason === 'role' ? `Reason for assigning ${pendingRole.replace(/_/g, ' ')} (this role can approve — the user is notified by e-mail)` : 'Reason for resetting this password (the user is notified by e-mail and any existing session is signed out)'}

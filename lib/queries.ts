@@ -362,7 +362,7 @@ export async function notificationsFor(userId: string) {
   return sql`select * from notifications where user_id=${userId}::uuid order by created_at desc limit 100`;
 }
 export async function listUsers() {
-  return sql`select id,name,email,role,department,active,must_change_password,locked_until,created_at,avatar_file_id from users order by active desc, name`;
+  return sql`select id,name,username,email,role,department,active,must_change_password,locked_until,created_at,avatar_file_id from users order by active desc, name`;
 }
 export async function auditLog(limit = 200) {
   return sql`select a.*, u.name actor, u.role actor_role from audit_logs a left join users u on u.id=a.user_id order by a.created_at desc limit ${limit}`;
