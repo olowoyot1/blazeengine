@@ -374,9 +374,9 @@ UPDATE sales SET transaction_document_type = CASE
   ELSE transaction_document_type END
 WHERE invoice_number IS NOT NULL;
 
-DO $$ DECLARE r record; BEGIN
-  FOR r IN SELECT id FROM sales LOOP PERFORM refresh_sale_next_action(r.id); END LOOP;
-END $$;
+-- Existing rows are refreshed lazily by the application and by the triggers above.
+-- Do not scan every sale during a serverless request: this can hold locks long enough
+-- to make a cold deployment exceed the platform invocation timeout.
 
 
     `;

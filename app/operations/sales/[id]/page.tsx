@@ -5,6 +5,7 @@ import { requireCap } from '@/lib/guard';
 import { getSale, listActiveApprovers } from '@/lib/queries';
 import { Badge } from '@/components/Badge';
 import { SaleActionPanel } from '@/app/sales/[id]/SaleActionPanel';
+import { GenerateSaleDocumentsButton } from '@/components/GenerateSaleDocumentsButton';
 import { availableSaleActions } from '@/lib/workflow/sale';
 import { naira, fmtDate, fmtDateTime, human } from '@/lib/format';
 import { SALE_STATUS_LABEL } from '@/lib/constants';
@@ -73,6 +74,7 @@ export default async function OperationsSaleDetail({ params }: { params: Promise
       <div className="grid2" style={{ marginTop: 15 }}>
         <div className="card">
           <h3>Operations action</h3>
+          {sale.status === 'SALES_APPROVED' && <GenerateSaleDocumentsButton saleId={sale.id} status={sale.status} role={s.role} />}
           <SaleActionPanel saleId={sale.id} actions={actions} />
         </div>
         <div className="card">
