@@ -237,6 +237,8 @@ export async function deleteTransaction(kind: 'SALE' | 'EXPENSE', id: string, re
       const { rows } = await tx.query(`select * from ${table} where id=$1::uuid for update`, [id]);
       if (!rows[0]) return null;
       if (kind === 'SALE') {
+        const topUps = await tx.query(`select count(*)::int as n from sales where parent_sale_id=$1::uuid`, [id]);
+        if (Number(topUps.rows[0]?.n ?? 0) > 0) throw new WorkflowError('This sale has top-up transactions linked to it. Delete the top-ups first.');
         await tx.query(`update expenses set sale_id=null, updated_at=now() where sale_id=$1::uuid`, [id]);
         await tx.query(`delete from site_records where sale_id=$1::uuid`, [id]);
         await tx.query(`delete from operations where sale_id=$1::uuid`, [id]);

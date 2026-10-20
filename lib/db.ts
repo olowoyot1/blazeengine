@@ -35,10 +35,7 @@ export const pool = new Pool({
 
 let schemaReady: Promise<void> | null = null;
 
-async function ensureApprovalSchema() {
-  if (!connectionString) return;
-  if (!schemaReady) {
-    schemaReady = pool.query(`
+const CONVERGENCE_SQL = `
       ALTER TABLE approvals ADD COLUMN IF NOT EXISTS approver_user_id uuid;
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS transaction_type text NOT NULL DEFAULT 'INITIAL_DEPOSIT';
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS parent_sale_id uuid REFERENCES sales(id) ON DELETE SET NULL;
@@ -382,7 +379,28 @@ DO $$ DECLARE r record; BEGIN
 END $$;
 
 
-    `).then(() => undefined).catch((error) => {
+    `;
+
+/**
+ * Runs the idempotent migration under a Postgres advisory lock. On serverless, several cold
+ * instances can start together; without the lock their concurrent CREATE OR REPLACE FUNCTION /
+ * DROP TRIGGER statements can collide ("tuple concurrently updated", deadlocks).
+ */
+async function runSchemaConvergence(text: string) {
+  const client = await pool.connect();
+  try {
+    await client.query('select pg_advisory_lock(727274101)');
+    try { await client.query(text); }
+    finally { await client.query('select pg_advisory_unlock(727274101)').catch(() => undefined); }
+  } finally {
+    client.release();
+  }
+}
+
+async function ensureApprovalSchema() {
+  if (!connectionString) return;
+  if (!schemaReady) {
+    schemaReady = runSchemaConvergence(CONVERGENCE_SQL).then(() => undefined).catch((error) => {
       schemaReady = null;
       throw error;
     });
@@ -437,15 +455,18 @@ export async function withTx<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
   if (!connectionString) return fn({ query: async () => ({ rows: [] }) });
   await ensureApprovalSchema();
   const client = await pool.connect();
+  let discard = false;
   try {
     await client.query('begin');
     const result = await fn({ query: (text, params) => client.query(text, params) });
     await client.query('commit');
     return result;
   } catch (error) {
-    await client.query('rollback');
+    // A failed rollback (e.g. dropped connection) must not mask the original error,
+    // and a connection in that state is discarded rather than returned to the pool.
+    try { await client.query('rollback'); } catch { discard = true; }
     throw error;
   } finally {
-    client.release();
+    client.release(discard || undefined);
   }
 }

@@ -47,6 +47,7 @@ async function main() {
   const status = async (id: string) => ((await pg.query(`select status from sales where id=$1`, [id])).rows[0] as any).status;
   const estatus = async (id: string) => ((await pg.query(`select status from expenses where id=$1`, [id])).rows[0] as any).status;
   const unread = async (userId: string) => Number(((await pg.query(`select count(*) n from notifications where user_id=$1`, [userId])).rows[0] as any).n);
+  const titled = async (userId: string, title: string) => Number(((await pg.query(`select count(*) n from notifications where user_id=$1 and title=$2`, [userId, title])).rows[0] as any).n);
   const pendingFor = async (id: string, role: string) => (await pg.query(`select * from approvals where entity_id=$1 and approver_role=$2 and status='PENDING' order by created_at`, [id, role])).rows as any[];
   const act = (a: wf.Actor, id: string, key: string, input: any = {}) => wf.performSaleAction(a, id, key, input);
   const createApprovedSale = async (a: wf.Actor, input: any) => { const id = await wf.createSale(a, { beneficiary_name: 'Test Beneficiary', beneficiary_phone: '07000000000', ...input }); await act(U.SALES_MANAGER, id, 'approve_new_sale', {}); return id; };
@@ -54,6 +55,26 @@ async function main() {
   // actual upload), so tests fabricate a stable, distinct fake path per name —
   // preserving the "same link reused" duplicate-evidence test below.
   const url = (n: string) => `/api/files/${crypto.createHash('md5').update(n).digest('hex').replace(/^(.{8})(.{4})(.{4})(.{4})(.{12}).*/, '$1-$2-$3-$4-$5')}`;
+  // Evidence fields are validated against uploaded_files (owner + purpose), so the
+  // fixtures that reach that check are registered as real uploads for the right actor.
+  const fileId = (n: string) => url(n).slice('/api/files/'.length);
+  const seedUpload = async (n: string, actor: wf.Actor, purpose: string) => {
+    await pg.query(
+      `insert into uploaded_files(id, filename, mime_type, size_bytes, data, uploaded_by, purpose) values($1::uuid, $2, 'application/pdf', 5, $3, $4::uuid, $5)`,
+      [fileId(n), `${n}.pdf`, Buffer.from('%PDF-'), actor.id, purpose]);
+  };
+  for (const n of ['p', 'proof', 'h1proof', 'h2proof', 'h3proof', 'reused-proof', 'filetest']) await seedUpload(n, U.SALES, 'sales_payment_evidence');
+  await seedUpload('b', U.FINANCE_OPERATIONS, 'finance_payment_advice');
+  for (const n of ['doa', 'sv', 'doa2', 'sv2', 'h3doa', 'h3sv']) await seedUpload(n, U.OPERATIONS, 'document');
+  await seedUpload('soft', U.SITE_MANAGER, 'document');
+  await seedUpload('r', U.ACCOUNTANT, 'document');
+
+  // Final audit now names the approver for every step of the chain. SALES_MANAGER2 takes the
+  // Sales Manager step so the manager who approved the sale earlier is not asked to approve it again.
+  const auditInput = (findings: string, extra: Record<string, unknown> = {}) => ({
+    audit_findings: findings, confirmed: 'on',
+    sales_manager_id: SALES_MANAGER2.id, operations_manager_id: U.OPERATIONS_MANAGER.id, hr_id: U.HR.id, ceo_id: U.CEO.id, ...extra,
+  });
 
   console.log('\nRights matrix');
   await t('ADMIN manages users but cannot act in workflow', async () => {
@@ -98,39 +119,51 @@ async function main() {
   await t('wrong role / wrong owner / wrong stage are rejected', async () => {
     await denied(act(U.ACCOUNTANT, sale, 'submit_payment_proof', { proof_url: url('p'), payment_reference: 'R1' }), /not permitted/);
     await denied(act(SALES2, sale, 'submit_payment_proof', { proof_url: url('p'), payment_reference: 'R1' }), /only act on sales you created/);
-    await denied(act(U.ACCOUNTANT, sale, 'enter_invoice', { invoice_number: 'I1', invoice_amount: '5000000' }), /Not available while/);
+    await denied(act(U.ACCOUNTANT, sale, 'enter_invoice', {}), /No payment proof has been submitted/);
+    await denied(act(U.ACCOUNTANT, sale, 'confirm_payment', {}), /Not available while/);
     await denied(act(U.SALES, sale, 'submit_payment_proof', { proof_url: 'javascript:alert(1)', payment_reference: 'R1' }), /please upload the file/);
   });
   await t('row1: sales uploads payment proof → accountant notified', async () => {
     await act(U.SALES, sale, 'submit_payment_proof', { proof_url: url('proof'), payment_reference: 'R1', amount_paid: '5000000' });
     assert.equal(await status(sale), 'PAYMENT_PROOF_SUBMITTED');
-    assert.equal(await unread(U.ACCOUNTANT.id), 1);
+    assert.equal(await titled(U.ACCOUNTANT.id, 'Payment proof submitted'), 1);
   });
-  await t('row2: accountant enters invoice → sales manager + sales exec notified', async () => {
-    const sm0 = await unread(U.SALES_MANAGER.id), s0 = await unread(U.SALES.id);
-    await act(U.ACCOUNTANT, sale, 'enter_invoice', { invoice_number: 'INV-1', invoice_amount: '5000000' });
+  await t('row2: accountant confirms payment, generates account documents → sales manager + sales exec notified', async () => {
+    await act(U.ACCOUNTANT, sale, 'confirm_payment', {});
+    assert.equal(await status(sale), 'PAYMENT_VERIFIED');
+    const T = 'Account documents generated – sale awaiting approval';
+    const sm0 = await titled(U.SALES_MANAGER.id, T), s0 = await titled(U.SALES.id, T);
+    await act(U.ACCOUNTANT, sale, 'enter_invoice', {});
     assert.equal(await status(sale), 'INVOICE_ENTERED');
-    assert.equal(await unread(U.SALES_MANAGER.id), sm0 + 1);
-    assert.equal(await unread(U.SALES.id), s0 + 1);
+    assert.equal(await titled(U.SALES_MANAGER.id, T), sm0 + 1);
+    assert.equal(await titled(U.SALES.id, T), s0 + 1);
+    const types = ((await pg.query(`select document_type from sale_documents where sale_id=$1`, [sale])).rows as any[]).map(r => r.document_type);
+    assert.ok(types.includes('INVOICE') && types.includes('SALES_RECEIPT'), `account docs: ${types}`);
   });
-  await t('sales manager can send back, then approve', async () => {
+  await t('sales manager can send back; accounts re-confirms; sales manager sends to operations', async () => {
     await act(U.SALES_MANAGER, sale, 'reject_sale', { reason: 'Amount mismatch' });
     assert.equal(await status(sale), 'PAYMENT_PROOF_SUBMITTED');
-  });
-  await t('re-enter invoice (same sale may reuse its own number) and approve', async () => {
-    await act(U.ACCOUNTANT, sale, 'enter_invoice', { invoice_number: 'INV-1', invoice_amount: '5000000' });
-    await denied(act(U.OPERATIONS_MANAGER, sale, 'approve_sale'), /not permitted/);
-    await act(U.SALES_MANAGER, sale, 'approve_sale', {});
+    await denied(act(U.SALES_MANAGER, sale, 'send_to_operations', {}), /Not available while/);
+    await act(U.ACCOUNTANT, sale, 'confirm_payment', {});
+    await denied(act(U.ACCOUNTANT, sale, 'send_to_operations', {}), /not permitted/);
+    await act(U.SALES_MANAGER, sale, 'send_to_operations', {});
     assert.equal(await status(sale), 'SALES_APPROVED');
     assert.ok(await unread(U.OPERATIONS.id) >= 1);
   });
-  await t('row3: operations creates contract & deed → accounts notified', async () => {
-    await denied(act(U.OPERATIONS, sale, 'create_contract', { contract_url: url('c') }), /Deed document is required/);
-    await act(U.OPERATIONS, sale, 'create_contract', { contract_url: url('c'), deed_url: url('d') });
+  await t('row3: operations generates contract + acknowledgement → document approvals required', async () => {
+    await denied(act(U.SALES, sale, 'create_contract', {}), /not permitted/);
+    await act(U.OPERATIONS, sale, 'create_contract', {});
     assert.equal(await status(sale), 'CONTRACT_PREPARED');
+    const types = ((await pg.query(`select document_type from sale_documents where sale_id=$1`, [sale])).rows as any[]).map(r => r.document_type);
+    assert.ok(types.includes('CONTRACT') && types.includes('ACKNOWLEDGMENT_LETTER'));
   });
-  await t('row4: accountant sends sales order/receipt/invoice', async () => {
-    await act(U.ACCOUNTANT, sale, 'send_sales_documents', { sales_order_no: 'SO1', sales_receipt_no: 'SR1', sales_invoice_no: 'SI1' });
+  await t('row4: accountant cannot send documents until originator + sales manager approve them', async () => {
+    await denied(act(U.ACCOUNTANT, sale, 'send_sales_documents', {}), /must approve the Operations documents first/);
+    const [orig] = await pendingFor(sale, 'SALES');
+    await wf.decide(U.SALES, orig.id, 'APPROVED');
+    const [mgr] = await pendingFor(sale, 'SALES_MANAGER');
+    await wf.decide(U.SALES_MANAGER, mgr.id, 'APPROVED');
+    await act(U.ACCOUNTANT, sale, 'send_sales_documents', {});
     assert.equal(await status(sale), 'ACCOUNT_DOCS_SENT');
   });
   await t('rows5-6: operations opens portal → site manager notified, 30-day clock set', async () => {
@@ -143,7 +176,7 @@ async function main() {
     assert.equal(task.length, 1);
   });
   await t('site manager cannot audit before ops docs; ops must upload both docs', async () => {
-    await denied(act(U.SITE_MANAGER, sale, 'final_audit', { audit_findings: 'ok', confirmed: 'on' }), /Not available/);
+    await denied(act(U.SITE_MANAGER, sale, 'final_audit', auditInput('ok')), /Not available/);
     await denied(act(U.OPERATIONS, sale, 'upload_allocation_docs', { deed_of_assignment_url: url('doa') }), /Survey plan is required/);
   });
   await t('row7: operations uploads deed of assignment + survey', async () => {
@@ -153,11 +186,12 @@ async function main() {
     assert.equal(task.status, 'DONE');
   });
   await t('row8: final audit requires confirmation and starts the chain', async () => {
-    await denied(act(U.SITE_MANAGER, sale, 'final_audit', { audit_findings: 'ok' }), /Please confirm/);
-    await denied(act(U.OPERATIONS, sale, 'final_audit', { audit_findings: 'ok', confirmed: 'on' }), /not permitted/);
-    await act(U.SITE_MANAGER, sale, 'final_audit', { audit_findings: 'All good', confirmed: 'on' });
+    await denied(act(U.SITE_MANAGER, sale, 'final_audit', auditInput('ok', { confirmed: '' })), /confirm/i);
+    await denied(act(U.OPERATIONS, sale, 'final_audit', auditInput('ok')), /not permitted/);
+    await denied(act(U.SITE_MANAGER, sale, 'final_audit', auditInput('ok', { hr_id: U.CEO.id })), /different user|correct designation/);
+    await act(U.SITE_MANAGER, sale, 'final_audit', auditInput('All good'));
     assert.equal(await status(sale), 'IN_APPROVAL');
-    const steps = (await pg.query(`select approver_role,seq from approvals where entity_id=$1 order by seq`, [sale])).rows as any[];
+    const steps = (await pg.query(`select approver_role,seq from approvals where entity_id=$1 and round='SALE_CHAIN' and round_no=(select max(round_no) from approvals where entity_id=$1 and round='SALE_CHAIN') order by seq`, [sale])).rows as any[];
     assert.deepEqual(steps.map(s => s.approver_role), ['SALES_MANAGER', 'OPERATIONS_MANAGER', 'HR', 'CEO']);
   });
   await t('row9-11: approvals run strictly one by one; wrong role / skipping / self blocked', async () => {
@@ -167,8 +201,8 @@ async function main() {
     await denied(wf.decide(U.HR, smA.id, 'APPROVED'), /Only SALES MANAGER/);
     await denied(wf.decide(U.SITE_MANAGER, smA.id, 'APPROVED'), /Only SALES MANAGER/);
     await denied(wf.decide(U.ADMIN, smA.id, 'APPROVED'), /Only SALES MANAGER/);
-    // the Sales Manager who approved this sale earlier cannot also clear this step (separation of duties)
-    await denied(wf.decide(U.SALES_MANAGER, smA.id, 'APPROVED'), /already approved this sale earlier/);
+    // the step is assigned to SALES_MANAGER2, so the manager who approved this sale earlier cannot clear it
+    await denied(wf.decide(U.SALES_MANAGER, smA.id, 'APPROVED'), /assigned to another user/);
     await wf.decide(SALES_MANAGER2, smA.id, 'APPROVED');
     await denied(wf.decide(SALES_MANAGER2, smA.id, 'APPROVED'), /already been actioned/);
     // Ops manager rejects → sale returned, remaining steps closed
@@ -180,7 +214,7 @@ async function main() {
   });
   await t('returned sale: ops re-uploads, site manager re-audits, new round completes', async () => {
     await act(U.OPERATIONS, sale, 'upload_allocation_docs', { deed_of_assignment_url: url('doa2'), survey_plan_url: url('sv2') });
-    await act(U.SITE_MANAGER, sale, 'final_audit', { audit_findings: 'Re-checked', confirmed: 'on' });
+    await act(U.SITE_MANAGER, sale, 'final_audit', auditInput('Re-checked'));
     for (const role of ['SALES_MANAGER', 'OPERATIONS_MANAGER', 'HR', 'CEO'] as const) {
       const [a] = await pendingFor(sale, role);
       assert.ok(a, `${role} step missing`);
@@ -286,32 +320,39 @@ async function main() {
 
 
   console.log('\nHardening fixes');
-  await t('invoice amount >2% off the original quote requires a reason', async () => {
+  await t('account documents are generated automatically from the verified payment and cannot be generated twice', async () => {
     const c4 = await wf.convertLead(U.SALES_MANAGER, await wf.createLead(U.SALES_MANAGER, { name: 'Hard1', phone: '0711' }));
     const sH = await createApprovedSale(U.SALES, { client_id: c4, property_name: 'Blaze Estate', plot_reference: 'H-1', amount: '1000000' });
+    await denied(act(U.ACCOUNTANT, sH, 'enter_invoice', {}), /No payment proof has been submitted/);
     await act(U.SALES, sH, 'submit_payment_proof', { proof_url: url('h1proof'), payment_reference: 'RH1' });
-    await denied(act(U.ACCOUNTANT, sH, 'enter_invoice', { invoice_number: 'INV-H1', invoice_amount: '1200000' }), /differs from the original quote/);
-    await act(U.ACCOUNTANT, sH, 'enter_invoice', { invoice_number: 'INV-H1', invoice_amount: '1200000', variance_reason: 'Client added extra plot fee' });
+    await act(U.ACCOUNTANT, sH, 'confirm_payment', {});
+    await act(U.ACCOUNTANT, sH, 'enter_invoice', {});
     assert.equal(await status(sH), 'INVOICE_ENTERED');
-    // within 2% needs no reason
-    const c5 = await wf.convertLead(U.SALES_MANAGER, await wf.createLead(U.SALES_MANAGER, { name: 'Hard2', phone: '0712' }));
-    const sH2 = await createApprovedSale(U.SALES, { client_id: c5, property_name: 'Blaze Estate', plot_reference: 'H-2', amount: '1000000' });
-    await act(U.SALES, sH2, 'submit_payment_proof', { proof_url: url('h2proof'), payment_reference: 'RH2' });
-    await act(U.ACCOUNTANT, sH2, 'enter_invoice', { invoice_number: 'INV-H2', invoice_amount: '1010000' });
-    assert.equal(await status(sH2), 'INVOICE_ENTERED');
+    const r = (await pg.query(`select amount, payment_amount from sales where id=$1`, [sH])).rows[0] as any;
+    assert.equal(Number(r.amount), 1000000);
+    assert.equal(Number(r.payment_amount), 1000000);
+    await denied(act(U.ACCOUNTANT, sH, 'enter_invoice', {}), /Not available while/);
+    // an Operations Manager may also approve a sale at this gate; an accountant may not
+    await denied(act(U.ACCOUNTANT, sH, 'approve_sale', {}), /not permitted/);
+    await act(U.OPERATIONS_MANAGER, sH, 'approve_sale', {});
+    assert.equal(await status(sH), 'SALES_APPROVED');
   });
 
   await t('the Sales Manager who approved the sale cannot also be the chain\'s Sales Manager approver', async () => {
     const c6 = await wf.convertLead(U.SALES_MANAGER, await wf.createLead(U.SALES_MANAGER, { name: 'Hard3', phone: '0713' }));
     const sH3 = await createApprovedSale(U.SALES, { client_id: c6, property_name: 'Blaze Estate', plot_reference: 'H-3', amount: '500000' });
     await act(U.SALES, sH3, 'submit_payment_proof', { proof_url: url('h3proof'), payment_reference: 'RH3' });
-    await act(U.ACCOUNTANT, sH3, 'enter_invoice', { invoice_number: 'INV-H3', invoice_amount: '500000' });
+    await act(U.ACCOUNTANT, sH3, 'confirm_payment', {});
+    await act(U.ACCOUNTANT, sH3, 'enter_invoice', {});
     await act(U.SALES_MANAGER, sH3, 'approve_sale', {});
-    await act(U.OPERATIONS, sH3, 'create_contract', { contract_url: url('h3c'), deed_url: url('h3d') });
-    await act(U.ACCOUNTANT, sH3, 'send_sales_documents', { sales_order_no: 'SOH3', sales_receipt_no: 'SRH3', sales_invoice_no: 'SIH3' });
+    await act(U.OPERATIONS, sH3, 'create_contract', {});
+    const [o3] = await pendingFor(sH3, 'SALES'); await wf.decide(U.SALES, o3.id, 'APPROVED');
+    const [m3] = await pendingFor(sH3, 'SALES_MANAGER'); await wf.decide(SALES_MANAGER2, m3.id, 'APPROVED');
+    await act(U.ACCOUNTANT, sH3, 'send_sales_documents', {});
     await act(U.OPERATIONS_MANAGER, sH3, 'open_ops_portal', {});
     await act(U.OPERATIONS, sH3, 'upload_allocation_docs', { deed_of_assignment_url: url('h3doa'), survey_plan_url: url('h3sv') });
-    await act(U.SITE_MANAGER, sH3, 'final_audit', { audit_findings: 'ok', confirmed: 'on' });
+    // assign the manager who already approved this sale to the chain's Sales Manager step
+    await act(U.SITE_MANAGER, sH3, 'final_audit', auditInput('ok', { sales_manager_id: U.SALES_MANAGER.id }));
     const [smStep] = await pendingFor(sH3, 'SALES_MANAGER');
     await denied(wf.decide(U.SALES_MANAGER, smStep.id, 'APPROVED'), /already approved this sale earlier/);
   });

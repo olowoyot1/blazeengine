@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 export default {
-  serverExternalPackages: ['ws', 'bcryptjs'],
+  serverExternalPackages: ['bcryptjs'],
   poweredByHeader: false,
   async headers() {
     return [{

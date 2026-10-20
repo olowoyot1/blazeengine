@@ -1,5 +1,5 @@
 import type { Role } from '../constants';
-import { ForbiddenError, WorkflowError, audit, logEvent, notifyRoles, notifyUsers, one, run, type Actor } from './core';
+import { ForbiddenError, WorkflowError, audit, logEvent, notifyRoles, notifyUsers, one, run, type Actor, type Ctx } from './core';
 import { buildAcknowledgementLetterPdf, buildContractOfSalePdf, type SaleAgreementInput } from '../pdf/saleAgreementDocuments';
 import { openRound, registerRound, type Step } from './approvals';
 
@@ -56,12 +56,26 @@ registerRound(SALE_DOCUMENTS_ROUND, {
   },
 });
 
-export async function generateSaleDocuments(actor: Actor, saleId: string) {
+function assertCanGenerate(actor: Actor) {
   if (actor.role !== 'SUPER_ADMIN' && !GENERATORS.has(actor.role)) {
     throw new ForbiddenError('Only Sales, Accounts, and Operations users can generate the Contract of Sale and Letter of Acknowledgement');
   }
+}
 
-  return run(actor, async ctx => {
+/** Standalone entry point (own transaction) — used by the UI button and the integration API. */
+export async function generateSaleDocuments(actor: Actor, saleId: string) {
+  assertCanGenerate(actor);
+  return run(actor, ctx => generateSaleDocumentsInTx(ctx, saleId));
+}
+
+/**
+ * Same logic, but inside the CALLER's transaction. Workflow actions (e.g. `create_contract`) already
+ * hold a row lock on the sale; opening a second transaction from there would wait on that lock forever.
+ */
+export async function generateSaleDocumentsInTx(ctx: Ctx, saleId: string) {
+  const actor = ctx.actor;
+  assertCanGenerate(actor);
+  {
     const s = await one(ctx, `select * from sales where id=$1 for update`, [saleId]);
     if (!s) throw new WorkflowError('Sale not found');
     if (String(s.transaction_type ?? '').toUpperCase() === 'TOP_UP') throw new WorkflowError('Top-up transactions do not receive a Contract of Sale or Letter of Acknowledgement');
@@ -119,5 +133,5 @@ export async function generateSaleDocuments(actor: Actor, saleId: string) {
     await notifyUsers(ctx, [s.created_by], n);
     await notifyRoles(ctx, ['SALES_MANAGER', 'ACCOUNTANT', 'FINANCE_OPERATIONS', 'OPERATIONS_MANAGER'], n);
     return { saleId: s.id, status: 'CONTRACT_PREPARED', alreadyGenerated: false, documents: [{ document_type: 'CONTRACT', document_url: contractUrl }, { document_type: 'ACKNOWLEDGMENT_LETTER', document_url: acknowledgementUrl }] };
-  });
+  }
 }

@@ -119,6 +119,7 @@ export const EXPENSE_ACTIONS: ExpenseAction[] = [
     ],
     async apply(ctx, e, i) {
       if (e.origin !== 'NEGOTIATION') throw new WorkflowError('Only a negotiated expense can be revised — enter a new direct expense instead');
+      await assertOwnedUpload(ctx, i.negotiation_url, 'Supporting document');
       const round = Number(e.round_no) + 1;
       await ctx.tx.query(
         `update expenses set category=$2, vendor=$3, negotiated_amount=$4, negotiation_notes=$5, negotiation_url=$6, amount=null, round_no=$7, rejected_reason=null where id=$1`,
@@ -137,6 +138,7 @@ export const EXPENSE_ACTIONS: ExpenseAction[] = [
       { name: 'receipt_url', label: 'Receipt document', type: 'file', required: true },
     ],
     async apply(ctx, e, i) {
+      await assertOwnedUpload(ctx, i.receipt_url, 'Receipt document');
       await assertFreshEvidence(ctx, i.receipt_url, 'receipt');
       await ctx.tx.query(`update expenses set receipt_no=$2, receipt_url=$3 where id=$1`, [e.id, i.receipt_no, i.receipt_url]);
       const n = { title: 'Receipt issued', message: `${label(e)} — receipt ${i.receipt_no}`, link: link(e) };
@@ -184,6 +186,7 @@ export async function createNegotiation(actor: Actor, input: Record<string, unkn
       const s = await one(ctx, `select id from sales where id=$1`, [p.sale_id]);
       if (!s) throw new WorkflowError('Related sale not found');
     }
+    await assertOwnedUpload(ctx, p.negotiation_url, 'Supporting document');
     const e = (await one(ctx,
       `insert into expenses(transaction_reference,sale_id,origin,category,vendor,negotiated_amount,negotiation_notes,negotiation_url,status,submitted_by)
        values('TXN-EXP-' || lpad(nextval('transaction_reference_seq')::text, 8, '0'),$1,'NEGOTIATION',$2,$3,$4,$5,$6,'NEGOTIATION_SUBMITTED',$7) returning *`,

@@ -222,7 +222,7 @@ export const SALE_ACTIONS: SaleAction[] = [
       await assertFreshEvidence(ctx, i.proof_url, 'payment proof');
       await addDoc(ctx, s.id, 'PAYMENT_PROOF', i.proof_url, 'Payment proof');
       await ctx.tx.query(`update sales set payment_status='PROOF_SUBMITTED', payment_reference=$2 where id=$1`, [s.id, i.payment_reference]);
-      await notifyRoles(ctx, ['SALES_MANAGER'], { title: 'Payment proof awaiting approval', message: `${saleLabel(s)} ��� reference ${i.payment_reference}. Approve or cancel this sale.`, link: saleLink(s) });
+      await notifyRoles(ctx, ['SALES_MANAGER'], { title: 'Payment proof awaiting approval', message: `${saleLabel(s)} — reference ${i.payment_reference}. Approve or cancel this sale.`, link: saleLink(s) });
       await notifyRoles(ctx, ['ACCOUNTANT', 'FINANCE_OPERATIONS'], { title: 'Payment proof submitted', message: `${saleLabel(s)} is awaiting Sales Manager approval before Accounts processing.`, link: saleLink(s) });
       return `Payment ref ${i.payment_reference}${i.amount_paid ? ` (${money(i.amount_paid)})` : ''}`;
     },
@@ -274,6 +274,9 @@ export const SALE_ACTIONS: SaleAction[] = [
       { name: 'note', label: 'Note to Sales (optional)', type: 'textarea' },
     ],
     async apply(ctx, s, i) {
+      if (!['PROOF_SUBMITTED', 'VERIFIED'].includes(String(s.payment_status ?? ''))) {
+        throw new WorkflowError('No payment proof has been submitted for this sale — Sales must upload payment evidence before account documents can be generated');
+      }
       const paid = Number(s.payment_amount ?? 0);
       if (!(paid > 0)) throw new WorkflowError('No payment amount is recorded on this sale — ask Sales to update the payment amount before generating account documents');
       const existing = storedDocNumbers(s);
@@ -346,8 +349,9 @@ export const SALE_ACTIONS: SaleAction[] = [
     fields: [],
     async apply(ctx, s) {
       if (s.transaction_type === 'TOP_UP') throw new WorkflowError('Top-up transactions do not receive sale documents');
-      const { generateSaleDocuments } = await import('./saleDocumentGeneration');
-      await generateSaleDocuments(ctx.actor, s.id);
+      // Must reuse this transaction: the sale row is already locked by performSaleAction.
+      const { generateSaleDocumentsInTx } = await import('./saleDocumentGeneration');
+      await generateSaleDocumentsInTx(ctx, s.id);
     },
   },
   {
@@ -392,6 +396,8 @@ export const SALE_ACTIONS: SaleAction[] = [
       { name: 'survey_plan_url', label: 'Survey plan', type: 'file', required: true },
     ],
     async apply(ctx, s, i) {
+      await assertOwnedUpload(ctx, i.deed_of_assignment_url, 'Deed of assignment');
+      await assertOwnedUpload(ctx, i.survey_plan_url, 'Survey plan');
       await addDoc(ctx, s.id, 'DEED_OF_ASSIGNMENT', i.deed_of_assignment_url, 'Deed of assignment');
       await addDoc(ctx, s.id, 'SURVEY_PLAN', i.survey_plan_url, 'Survey plan');
       await closeTasks(ctx, s.id, 'ALLOCATION_DOCS');
@@ -405,6 +411,7 @@ export const SALE_ACTIONS: SaleAction[] = [
     roles: ['OPERATIONS', 'OPERATIONS_MANAGER'], from: ['SITE_NOTIFIED', 'OPS_DEED_UPLOADED', 'RETURNED'], to: 'OPS_DEED_UPLOADED',
     fields: [{ name: 'deed_of_assignment_url', label: 'Deed of assignment', type: 'file', required: true }],
     async apply(ctx, s, i) {
+      await assertOwnedUpload(ctx, i.deed_of_assignment_url, 'Deed of assignment');
       await addDoc(ctx, s.id, 'DEED_OF_ASSIGNMENT', i.deed_of_assignment_url, 'Deed of assignment');
       await notifyRoles(ctx, ['SITE_MANAGER'], { title: 'Deed of assignment ready', message: `${saleLabel(s)}. Upload the survey plan.`, link: saleLink(s) });
     },
@@ -417,6 +424,7 @@ export const SALE_ACTIONS: SaleAction[] = [
     async apply(ctx, s, i) {
       const deed = await one(ctx, `select id from sale_documents where sale_id=$1 and document_type='DEED_OF_ASSIGNMENT' limit 1`, [s.id]);
       if (!deed) throw new WorkflowError('Operations must upload the deed of assignment before the Site Manager uploads the survey plan');
+      await assertOwnedUpload(ctx, i.survey_plan_url, 'Survey plan');
       await addDoc(ctx, s.id, 'SURVEY_PLAN', i.survey_plan_url, 'Survey plan');
       await closeTasks(ctx, s.id, 'ALLOCATION_DOCS');
       const due = d10(s.ops_due_date);
@@ -481,6 +489,7 @@ export const SALE_ACTIONS: SaleAction[] = [
     ],
     async apply(ctx, s, i) {
       await assertAllocationPaid(ctx, s);
+      await assertOwnedUpload(ctx, i.soft_copy_url, 'Soft copy');
       await addDoc(ctx, s.id, 'SOFT_COPY', i.soft_copy_url, 'Soft copy sent to client');
       await siteRecord(ctx, s.id, 'SOFT_COPY_SENT', { url: i.soft_copy_url });
       await siteRecord(ctx, s.id, 'SITE_SURVEY', { plan: i.site_survey_plan });
