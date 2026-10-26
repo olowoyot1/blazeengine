@@ -39,8 +39,14 @@ export type SaleAction = {
   /** SALES executives may only act on sales they created. */
   ownOnly?: boolean;
   danger?: boolean;
+  /** Extra availability condition on top of role + status. */
+  when?: (sale: Row, user: { id: string; role: Role }) => boolean;
+  /** Overrides `to` when the destination depends on the sale (e.g. top-ups). */
+  next?: (sale: Row) => string | undefined;
   apply: (ctx: Ctx, sale: Row, input: Parsed) => Promise<string | void>;
 };
+
+const isTopUp = (s: { transaction_type?: unknown }) => String(s.transaction_type ?? '').toUpperCase() === 'TOP_UP';
 
 async function addDoc(ctx: Ctx, saleId: string, type: string, url: unknown, name?: string) {
   if (!url) return;
@@ -196,11 +202,20 @@ export const SALE_ACTIONS: SaleAction[] = [
     help: 'Sales Manager or Operations Manager reviews the submitted sale. Payment processing cannot start until this approval is completed.',
     // Sales organizers can approve submitted sales, but the self-approval guard in
     // performSaleAction prevents them from approving a sale they created.
-    roles: ['SALES', ...SALE_APPROVERS], from: ['PENDING_SALES_APPROVAL'], to: 'DRAFT',
+    roles: ['SALES', ...SALE_APPROVERS], from: ['PENDING_SALES_APPROVAL', 'DRAFT'], to: 'DRAFT',
     fields: [{ name: 'note', label: 'Approval note (optional)', type: 'textarea' }],
+    // DRAFT is only accepted for legacy top-ups that were created in DRAFT with evidence attached but never approved.
+    when: s => s.status === 'PENDING_SALES_APPROVAL' || (isTopUp(s) && s.payment_status === 'PROOF_SUBMITTED' && !s.gate_approved_by),
     async apply(ctx, s, i) {
       await ctx.tx.query(`update sales set gate_approved_by=$2 where id=$1`, [s.id, ctx.actor.id]);
       const hasProof = s.payment_status === 'PROOF_SUBMITTED';
+      if (isTopUp(s)) {
+        if (!hasProof) throw new WorkflowError('This top-up has no payment evidence — the sales executive must upload it first');
+        const n = { title: 'Top-up approved – confirm payment', message: `${saleLabel(s)} top-up (${money(s.payment_amount)}, ref ${s.payment_reference}) was approved by the Sales Manager. Accounts should confirm or reject the payment.`, link: saleLink(s) };
+        await notifyRoles(ctx, ['ACCOUNTANT', 'FINANCE_OPERATIONS'], n);
+        await notifyUsers(ctx, [s.created_by], { ...n, title: 'Top-up approved by Sales Manager' });
+        return i.note ? String(i.note) : 'Top-up approved';
+      }
       const n = hasProof
         ? { title: 'Sale approved – payment proof ready for Accounts', message: `${saleLabel(s)} has been approved by the Sales Manager. Accounts can now verify the uploaded payment evidence and enter the invoice.`, link: saleLink(s) }
         : { title: 'Sale approved – payment can proceed', message: `${saleLabel(s)} has been approved by the Sales Manager. Upload payment proof when the client pays.`, link: saleLink(s) };
@@ -213,6 +228,9 @@ export const SALE_ACTIONS: SaleAction[] = [
     key: 'submit_payment_proof', label: 'Upload payment proof', ownOnly: true,
     help: 'Client has paid. Attach the payment proof link and reference – Accounts is notified.',
     roles: ['SALES', 'SALES_MANAGER'], from: ['PENDING_SALES_APPROVAL', 'DRAFT'], to: 'PAYMENT_PROOF_SUBMITTED',
+    // Top-up evidence comes from whoever recorded the top-up; the Sales Manager only approves it.
+    when: (s, u) => !isTopUp(s) || (s.created_by === u.id && s.payment_status !== 'PROOF_SUBMITTED'),
+    next: s => (isTopUp(s) ? 'PENDING_SALES_APPROVAL' : undefined),
     fields: [
       { name: 'proof_url', label: 'Payment proof', type: 'file', required: true, uploadPurpose: 'sales_payment_evidence' },
       { name: 'payment_reference', label: 'Payment reference', type: 'text', required: true },
@@ -222,15 +240,20 @@ export const SALE_ACTIONS: SaleAction[] = [
       await assertFreshEvidence(ctx, i.proof_url, 'payment proof');
       await addDoc(ctx, s.id, 'PAYMENT_PROOF', i.proof_url, 'Payment proof');
       await ctx.tx.query(`update sales set payment_status='PROOF_SUBMITTED', payment_reference=$2 where id=$1`, [s.id, i.payment_reference]);
+      if (isTopUp(s)) {
+        await ctx.tx.query(`update sales set gate_approved_by=null where id=$1`, [s.id]);
+        await notifyRoles(ctx, ['SALES_MANAGER'], { title: 'Top-up awaiting approval', message: `${saleLabel(s)} — reference ${i.payment_reference}. Review and approve the top-up.`, link: saleLink(s) });
+        return `Top-up payment ref ${i.payment_reference}`;
+      }
       await notifyRoles(ctx, ['SALES_MANAGER'], { title: 'Payment proof awaiting approval', message: `${saleLabel(s)} — reference ${i.payment_reference}. Approve or cancel this sale.`, link: saleLink(s) });
       await notifyRoles(ctx, ['ACCOUNTANT', 'FINANCE_OPERATIONS'], { title: 'Payment proof submitted', message: `${saleLabel(s)} is awaiting Sales Manager approval before Accounts processing.`, link: saleLink(s) });
       return `Payment ref ${i.payment_reference}${i.amount_paid ? ` (${money(i.amount_paid)})` : ''}`;
     },
   },
   {
-    key: 'return_to_sales', label: 'Reject payment proof', danger: true,
-    help: 'Payment proof cannot be verified – send back to Sales.',
-    roles: ['ACCOUNTANT'], from: ['PAYMENT_PROOF_SUBMITTED'], to: 'DRAFT', fields: [reason],
+    key: 'return_to_sales', label: 'Reject payment', danger: true,
+    help: 'Payment cannot be verified – send back to Sales.',
+    roles: ['ACCOUNTANT', 'FINANCE_OPERATIONS'], from: ['PAYMENT_PROOF_SUBMITTED'], to: 'DRAFT', fields: [reason],
     async apply(ctx, s, i) {
       await ctx.tx.query(`update sales set payment_status='UNPAID' where id=$1`, [s.id]);
       await notifyUsers(ctx, [s.created_by], { title: 'Payment proof rejected', message: `${saleLabel(s)}: ${i.reason}`, link: saleLink(s) });
@@ -239,14 +262,30 @@ export const SALE_ACTIONS: SaleAction[] = [
     },
   },
   {
-    key: 'confirm_payment', label: 'Confirm payment proof',
-    help: 'Accounts verifies the uploaded payment proof. Once confirmed, the sale is returned to the Sales Manager for the next approval step.',
+    key: 'confirm_payment', label: 'Confirm payment',
+    help: 'Accounts verifies the uploaded payment proof. Sales are returned to the Sales Manager for the next step; top-ups get their sales receipt and move straight to allocation preparation.',
     roles: ['ACCOUNTANT', 'FINANCE_OPERATIONS'], from: ['PAYMENT_PROOF_SUBMITTED'], to: 'PAYMENT_VERIFIED',
+    next: s => (isTopUp(s) ? 'SITE_NOTIFIED' : undefined),
     fields: [{ name: 'note', label: 'Verification note (optional)', type: 'textarea' }],
     async apply(ctx, s, i) {
       const paid = Number(s.payment_amount ?? 0);
       if (!(paid > 0)) throw new WorkflowError('No payment amount is recorded on this sale.');
       await ctx.tx.query(`update sales set payment_status='VERIFIED', invoice_variance_reason=null where id=$1`, [s.id]);
+      if (isTopUp(s)) {
+        let numbers = storedDocNumbers(s);
+        if (!numbers) {
+          numbers = await allocateDocNumbers(ctx, s);
+          await saveDocNumbers(ctx, s.id, numbers);
+          await ctx.tx.query(`update sales set amount=$2 where id=$1`, [s.id, paid]);
+          await attachAccountDocuments(ctx, s, numbers, paid);
+        }
+        await ctx.tx.query(`update sales set ops_due_date = current_date + ${ALLOCATION_WINDOW_DAYS} where id=$1`, [s.id]);
+        await openTask(ctx, s.id, 'ALLOCATION_DOCS', ALLOCATION_WINDOW_DAYS, 'Deed of assignment + survey plan');
+        const n = { title: 'Top-up payment confirmed', message: `${saleLabel(s)} — ${money(paid)} confirmed by Accounts. Sales receipt ${numbers.receiptNo} issued; Site Management can prepare allocation documents.${i.note ? ` ${i.note}` : ''}`, link: saleLink(s) };
+        await notifyRoles(ctx, ['SITE_MANAGER', 'SALES_MANAGER', ...OPS], n);
+        await notifyUsers(ctx, [s.created_by], n);
+        return `Top-up payment confirmed · sales receipt ${numbers.receiptNo}`;
+      }
       const n = { title: 'Payment confirmed — Sales Manager action required', message: `${saleLabel(s)} payment proof was confirmed by Accounts. Sales Manager should now send it to Operations for document generation.${i.note ? ` ${i.note}` : ''}`, link: saleLink(s) };
       await notifyRoles(ctx, ['SALES_MANAGER'], n);
       await notifyUsers(ctx, [s.created_by], n);
@@ -270,6 +309,7 @@ export const SALE_ACTIONS: SaleAction[] = [
     key: 'enter_invoice', label: 'Generate account documents',
     help: 'Generate the account documents after payment verification. Outright purchases get an invoice and sales receipt, installment purchases get a sales order and sales receipt, and top-ups get a sales receipt only. Numbers and PDFs are generated automatically. The sale is then sent back to Sales for approval.',
     roles: ['ACCOUNTANT', 'FINANCE_OPERATIONS'], from: ['PAYMENT_VERIFIED', 'DRAFT'], to: 'INVOICE_ENTERED',
+    when: s => !isTopUp(s) || s.status === 'PAYMENT_VERIFIED',
     fields: [
       { name: 'note', label: 'Note to Sales (optional)', type: 'textarea' },
     ],
@@ -567,18 +607,25 @@ export const SALE_ACTIONS: SaleAction[] = [
 const BY_KEY = new Map(SALE_ACTIONS.map(a => [a.key, a]));
 export const getSaleAction = (k: string) => BY_KEY.get(k);
 
+const TOP_UP_ACTIONS = new Set([
+  'approve_new_sale', 'submit_payment_proof', 'return_to_sales', 'confirm_payment',
+  'enter_invoice', 'reject_sale', 'approve_sale', 'skip_topup_documents',
+  'start_pre_allocation', 'set_allocation_date', 'confirm_allocation',
+  'log_site_activity', 'cancel_sale',
+]);
+
+function isActionAvailable(a: SaleAction, sale: Row, user: { id: string; role: Role }) {
+  return a.from.includes(sale.status) &&
+    (!isTopUp(sale) || TOP_UP_ACTIONS.has(a.key)) &&
+    (!a.when || a.when(sale, user));
+}
+
+/** Actions this user may perform right now on this sale (drives the UI and the queue). */
 /** Actions this user may perform right now on this sale (drives the UI and the queue). */
 export function availableSaleActions(sale: { status: string; created_by?: string | null; transaction_type?: string | null }, user: { id: string; role: Role }) {
-  const topUpAllowed = new Set([
-    'approve_new_sale', 'submit_payment_proof', 'return_to_sales',
-    'enter_invoice', 'reject_sale', 'approve_sale', 'skip_topup_documents',
-    'start_pre_allocation', 'set_allocation_date', 'confirm_allocation',
-    'log_site_activity', 'cancel_sale',
-  ]);
   return SALE_ACTIONS.filter(a =>
     (user.role === 'SUPER_ADMIN' || a.roles.includes(user.role)) &&
-    a.from.includes(sale.status) &&
-    (String(sale.transaction_type ?? 'INITIAL_DEPOSIT').toUpperCase() !== 'TOP_UP' || topUpAllowed.has(a.key)) &&
+    isActionAvailable(a, sale as Row, user) &&
     !(a.ownOnly && user.role === 'SALES' && sale.created_by !== user.id));
 }
 
@@ -592,9 +639,10 @@ export async function performSaleAction(actor: Actor, saleId: string, key: strin
     if (!a.from.includes(s.status)) throw new WorkflowError(`Not available while the sale is "${SALE_STATUS_LABEL[s.status] ?? s.status}"`);
     if (a.ownOnly && actor.role === 'SALES' && s.created_by !== actor.id) throw new ForbiddenError('You can only act on sales you created');
     if (a.key === 'approve_new_sale' && s.created_by === actor.id) throw new ForbiddenError('You cannot approve your own sale');
+    if (!isActionAvailable(a, s, actor)) throw new WorkflowError(`"${a.label}" is not available for this ${isTopUp(s) ? 'top-up' : 'sale'} right now`);
     const parsed = parseFields(a.fields, input);
     const notes = (await a.apply(ctx, s, parsed)) || null;
-    const nextStatus = a.key === 'approve_new_sale' && s.payment_status === 'PROOF_SUBMITTED' ? 'PAYMENT_PROOF_SUBMITTED' : (a.to ?? s.status);
+    const nextStatus = a.key === 'approve_new_sale' && s.payment_status === 'PROOF_SUBMITTED' ? 'PAYMENT_PROOF_SUBMITTED' : (a.next?.(s) ?? a.to ?? s.status);
     if (a.to) await ctx.tx.query(`update sales set status=$2, updated_at=now() where id=$1`, [s.id, nextStatus]);
     else await ctx.tx.query(`update sales set updated_at=now() where id=$1`, [s.id]);
     await logEvent(ctx, 'SALE', s.id, stageOf(a), a.label, s.status, nextStatus, notes);
@@ -679,7 +727,7 @@ export async function recordSaleTopUp(actor: Actor, saleId: string, input: Recor
         'TOP_UP', $1, $2, $3,
         $4, $5, $6, $7,
         $8, $9, $8, $9, $10,
-        $11, 'DRAFT', 'PROOF_SUBMITTED', $12, $13,
+        $11, 'PENDING_SALES_APPROVAL', 'PROOF_SUBMITTED', $12, $13,
         $14, $15, $16, $17, $18, $19
       )
       returning id`,
@@ -693,7 +741,8 @@ export async function recordSaleTopUp(actor: Actor, saleId: string, input: Recor
     )!;
     if (!topup) throw new WorkflowError('The top-up could not be linked to the existing sale.');
     await addDoc(ctx, topup.id, 'PAYMENT_PROOF', p.payment_proof_url, 'Top-up payment proof');
-    await logEvent(ctx, 'SALE', topup.id, 'SALES', 'Top-up linked to existing sale', null, 'DRAFT', `${sale.sale_reference} · ${money(paymentAmount)}`);
+    await logEvent(ctx, 'SALE', topup.id, 'SALES', 'Top-up linked to existing sale', null, 'PENDING_SALES_APPROVAL', `${sale.sale_reference} · ${money(paymentAmount)}`);
+    await notifyRoles(ctx, ['SALES_MANAGER'], { title: 'Top-up awaiting approval', message: `${sale.client_name} — ${money(paymentAmount)} top-up (ref ${p.payment_reference}) on ${sale.sale_reference}. Review the attached evidence and approve.`, link: saleLink(topup.id as string) });
     await audit(ctx, 'SALE_TOPUP_CREATED', 'SALE', topup.id, { parent_sale_id: sale.id, sale_reference: sale.sale_reference, amount: paymentAmount, bank: p.payment_bank });
     return topup.id as string;
   });
